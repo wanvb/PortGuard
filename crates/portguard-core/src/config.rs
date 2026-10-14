@@ -50,7 +50,7 @@ impl ProtectionRule {
 }
 
 /// 三组保护策略。
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProtectConfig {
     /// 普通 TCP 保护端口。
@@ -59,6 +59,33 @@ pub struct ProtectConfig {
     pub udp: ProtectionRule,
     /// TCP-WEB 保护端口（原程序中的 WEB 分类，非硬编码 80/443）。
     pub http: ProtectionRule,
+}
+
+/// 默认保护端口。
+///
+/// 必须与配置文件模板保持一致：`#[serde(default)]` 在用户手写的
+/// 局部配置（或旧版本升级后新增字段）上走的就是这个默认值，
+/// 若这里给空端口，程序会静默失去保护能力。
+impl Default for ProtectConfig {
+    fn default() -> Self {
+        ProtectConfig {
+            tcp: ProtectionRule {
+                ports: vec![3389],
+                window_seconds: 10,
+                max_attempts: 5,
+            },
+            udp: ProtectionRule {
+                ports: vec![3389],
+                window_seconds: 10,
+                max_attempts: 5,
+            },
+            http: ProtectionRule {
+                ports: vec![80, 443],
+                window_seconds: 10,
+                max_attempts: 10,
+            },
+        }
+    }
 }
 
 /// 内置 Web 面板配置。
@@ -173,7 +200,7 @@ impl Default for LoggingConfig {
 }
 
 /// 顶层配置。
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub panel: PanelConfig,
@@ -188,6 +215,16 @@ pub struct Config {
     pub config_version: u32,
 }
 
+/// 与 [`Config::with_defaults`] 同源。
+///
+/// `#[serde(default)]` 在解析局部配置（用户手写、或旧版本升级后新增字段）时
+/// 走的就是这里，两者若不一致，缺失字段会静默变成「空端口 + 版本 0」。
+impl Default for Config {
+    fn default() -> Self {
+        Config::with_defaults()
+    }
+}
+
 /// 默认配置：与开发文档 13.1 的建议值保持一致。
 impl Config {
     pub fn with_defaults() -> Config {
@@ -195,23 +232,7 @@ impl Config {
             config_version: CURRENT_CONFIG_VERSION,
             panel: PanelConfig::default(),
             network: NetworkConfig::default(),
-            protect: ProtectConfig {
-                tcp: ProtectionRule {
-                    ports: vec![3389],
-                    window_seconds: 10,
-                    max_attempts: 5,
-                },
-                udp: ProtectionRule {
-                    ports: vec![3389],
-                    window_seconds: 10,
-                    max_attempts: 5,
-                },
-                http: ProtectionRule {
-                    ports: vec![80, 443],
-                    window_seconds: 10,
-                    max_attempts: 10,
-                },
-            },
+            protect: ProtectConfig::default(),
             ban: BanConfig::default(),
             lists: ListsConfig::default(),
             rdp: RdpConfig::default(),
@@ -272,6 +293,10 @@ impl Config {
         self.lists.whitelist = normalize_rule_lines(&self.lists.whitelist);
         self.lists.blacklist = normalize_rule_lines(&self.lists.blacklist);
         self.rdp.client_whitelist = normalize_rule_lines(&self.rdp.client_whitelist);
+        // 旧版配置（或缺失该字段）统一抬到当前结构版本，避免后续迁移误判
+        if self.config_version < CURRENT_CONFIG_VERSION {
+            self.config_version = CURRENT_CONFIG_VERSION;
+        }
     }
 
     /// 校验，返回人类可读的中文错误信息列表。
@@ -332,9 +357,18 @@ mod tests {
     #[test]
     fn 空文件解析为默认值() {
         let c = Config::from_toml("").unwrap();
-        // 空 TOML 全部字段走 Default，端口为空但结构完整。
-        assert!(c.protect.tcp.ports.is_empty());
-        assert_eq!(c.ban.duration_seconds, 3600);
+        // 空 TOML 全部字段走 Default，必须与 with_defaults 完全一致，
+        // 否则手写局部配置会让程序静默失去保护能力。
+        assert_eq!(c, Config::with_defaults());
+    }
+
+    #[test]
+    fn 只写面板段时保护端口不丢失() {
+        let c = Config::from_toml("[panel]\nbind = \"127.0.0.1:19000\"\n").unwrap();
+        assert_eq!(c.panel.bind, "127.0.0.1:19000");
+        assert_eq!(c.protect.tcp.ports, vec![3389]);
+        assert_eq!(c.protect.http.ports, vec![80, 443]);
+        assert_eq!(c.protect.udp.ports, vec![3389]);
     }
 
     #[test]
