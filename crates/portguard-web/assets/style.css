@@ -48,8 +48,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 16px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   /* 极低对比度的网格，提供"工业面板"的质感而不干扰读数 */
   background-image: linear-gradient(rgba(56, 189, 248, 0.025) 1px, transparent 1px),
@@ -69,7 +69,7 @@ textarea {
 
 .app {
   display: grid;
-  grid-template-columns: 232px 1fr;
+  grid-template-columns: 252px 1fr;
   min-height: 100vh;
 }
 
@@ -98,13 +98,13 @@ textarea {
 }
 
 .brand-name {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.4px;
 }
 
 .brand-sub {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   letter-spacing: 2px;
 }
@@ -146,8 +146,8 @@ textarea {
 
 .nav-badge {
   font-family: var(--mono);
-  font-size: 11px;
-  padding: 1px 7px;
+  font-size: 12px;
+  padding: 2px 8px;
   border-radius: 99px;
   background: var(--surface-3);
   color: var(--text-dim);
@@ -163,7 +163,7 @@ textarea {
 .sidebar-foot {
   padding: 12px 18px 16px;
   border-top: 1px solid var(--border-soft);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--muted);
   line-height: 1.7;
 }
@@ -207,7 +207,7 @@ main {
   border: 1px solid var(--border);
   border-radius: 99px;
   background: var(--surface);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -248,7 +248,7 @@ main {
 /* ---------------- 按钮 ---------------- */
 
 .btn {
-  padding: 7px 15px;
+  padding: 8px 16px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -294,8 +294,8 @@ main {
 }
 
 .btn.sm {
-  padding: 3px 10px;
-  font-size: 12px;
+  padding: 4px 11px;
+  font-size: 13.5px;
   border-radius: var(--radius-sm);
 }
 
@@ -389,21 +389,21 @@ main {
 }
 
 .stat-label {
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--muted);
   letter-spacing: 0.5px;
 }
 
 .stat-value {
   font-family: var(--mono);
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 600;
   line-height: 1.25;
   margin-top: 2px;
 }
 
 .stat-foot {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--muted);
   margin-top: 2px;
 }
@@ -412,13 +412,13 @@ main {
 
 .table-wrap {
   overflow: auto;
-  max-height: calc(100vh - 250px);
+  max-height: calc(100vh - 280px);
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14.5px;
 }
 
 thead th {
@@ -426,18 +426,18 @@ thead th {
   top: 0;
   z-index: 2;
   text-align: left;
-  padding: 9px 12px;
+  padding: 11px 12px;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   color: var(--text-dim);
   font-weight: 600;
-  font-size: 12px;
+  font-size: 13.5px;
   letter-spacing: 0.4px;
   white-space: nowrap;
 }
 
 tbody td {
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-soft);
   vertical-align: middle;
   white-space: nowrap;
@@ -493,9 +493,9 @@ tbody tr.whitelisted {
 
 .badge {
   display: inline-block;
-  padding: 1px 9px;
+  padding: 2px 10px;
   border-radius: 99px;
-  font-size: 11px;
+  font-size: 12px;
   border: 1px solid transparent;
   font-family: var(--mono);
   letter-spacing: 0.3px;
@@ -531,7 +531,7 @@ tbody tr.whitelisted {
   border-color: var(--border);
 }
 
-/* ---------------- 进度条（窗口次数 / 阈值） ---------------- */
+/* ---------------- 进度条（连接次数 / 阈值） ---------------- */
 
 .meter {
   display: flex;
@@ -542,8 +542,8 @@ tbody tr.whitelisted {
 
 .meter-track {
   flex: 1;
-  height: 5px;
-  border-radius: 3px;
+  height: 7px;
+  border-radius: 4px;
   background: var(--surface-3);
   overflow: hidden;
 }
@@ -564,9 +564,9 @@ tbody tr.whitelisted {
 
 .meter-text {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--text-dim);
-  min-width: 52px;
+  min-width: 58px;
   text-align: right;
 }
 
@@ -582,9 +582,9 @@ tbody tr.whitelisted {
 .event {
   display: flex;
   gap: 10px;
-  padding: 7px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 13px;
+  font-size: 14.5px;
 }
 
 .event:last-child {
@@ -593,14 +593,14 @@ tbody tr.whitelisted {
 
 .event-time {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
-  flex: 0 0 138px;
+  flex: 0 0 150px;
 }
 
 .event-kind {
-  flex: 0 0 68px;
-  font-size: 11px;
+  flex: 0 0 76px;
+  font-size: 12px;
   font-family: var(--mono);
   padding-top: 2px;
 }
@@ -642,12 +642,12 @@ tbody tr.whitelisted {
 }
 
 .field label {
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--text-dim);
 }
 
 .field .hint {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
@@ -675,7 +675,7 @@ textarea:focus {
 
 textarea {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 13.5px;
   min-height: 128px;
   resize: vertical;
   line-height: 1.6;
@@ -719,7 +719,7 @@ textarea {
 }
 
 .switch-text span {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -737,9 +737,9 @@ textarea {
 }
 
 .port-row .port-name {
-  flex: 0 0 96px;
+  flex: 0 0 116px;
   color: var(--text-dim);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .port-row input[type="text"] {
@@ -766,7 +766,7 @@ textarea {
   border-radius: var(--radius-sm);
   padding: 10px 14px;
   color: #ffd9d9;
-  font-size: 12.5px;
+  font-size: 13.5px;
   margin-bottom: 14px;
 }
 
@@ -779,9 +779,9 @@ textarea {
 
 .logs {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 14px;
   line-height: 1.75;
-  max-height: calc(100vh - 260px);
+  max-height: calc(100vh - 290px);
   overflow: auto;
   padding: 10px 14px;
   background: #070b10;
@@ -796,11 +796,11 @@ textarea {
 
 .log-line .t {
   color: var(--muted);
-  flex: 0 0 132px;
+  flex: 0 0 148px;
 }
 
 .log-line .l {
-  flex: 0 0 46px;
+  flex: 0 0 54px;
   font-weight: 600;
 }
 
@@ -841,7 +841,7 @@ textarea {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   box-shadow: var(--shadow);
-  font-size: 13px;
+  font-size: 14px;
   animation: slide-in 0.18s ease-out;
 }
 
@@ -893,13 +893,13 @@ textarea {
 
 .modal-box h3 {
   margin: 0 0 8px;
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .modal-box p {
   margin: 0 0 16px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 14.5px;
 }
 
 .modal-actions {
