@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>PortGuard 控制面板</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- 侧边导航 -->
+      <aside class="sidebar">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path
+              d="M16 2.6 27 6.4v10.2c0 6.6-4.5 11.4-11 13.1-6.5-1.7-11-6.5-11-13.1V6.4z"
+              fill="none"
+              stroke="#38bdf8"
+              stroke-width="1.8"
+            />
+            <path
+              d="M16 10.5v6.2M16 20.4v1.6"
+              stroke="#38bdf8"
+              stroke-width="2.1"
+              stroke-linecap="round"
+            />
+          </svg>
+          <div>
+            <div class="brand-name">PortGuard</div>
+            <div class="brand-sub">端口守卫</div>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-item active" data-page="overview">概览</button>
+          <button class="nav-item" data-page="connections">
+            当前连接<span class="nav-badge" id="badge-connections">0</span>
+          </button>
+          <button class="nav-item" data-page="bans">
+            封停列表<span class="nav-badge" id="badge-bans">0</span>
+          </button>
+          <button class="nav-item" data-page="settings">设置</button>
+          <button class="nav-item" data-page="logs">运行日志</button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div id="foot-version">版本读取中…</div>
+          <div>仅监听本机回环地址</div>
+        </div>
+      </aside>
+
+      <main>
+        <!-- 顶部状态条 -->
+        <header class="topbar">
+          <div class="chips">
+            <span class="chip">
+              <i class="dot" id="chip-run-dot"></i>
+              状态 <b id="chip-run">未知</b>
+            </span>
+            <span class="chip">网卡 <code id="chip-adapter">-</code></span>
+            <span class="chip">本机 IP <code id="chip-ip">-</code></span>
+            <span class="chip">
+              <i class="dot" id="chip-admin-dot"></i>
+              权限 <b id="chip-admin">检测中</b>
+            </span>
+            <span class="chip">运行时长 <b id="chip-uptime">-</b></span>
+          </div>
+          <div class="form-actions">
+            <button class="btn primary" id="btn-start">开始保护</button>
+            <button class="btn" id="btn-stop">停止保护</button>
+            <button class="btn" id="btn-refresh">立即刷新</button>
+          </div>
+        </header>
+
+        <!-- 概览 -->
+        <section class="page active" id="page-overview">
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-label">跟踪中的来源 IP</div>
+              <div class="stat-value" id="stat-tracking">0</div>
+              <div class="stat-foot">窗口内正在计数的地址</div>
+            </div>
+            <div class="stat danger">
+              <div class="stat-label">已封停</div>
+              <div class="stat-value" id="stat-banned">0</div>
+              <div class="stat-foot" id="stat-banned-foot">其中永久 0</div>
+            </div>
+            <div class="stat ok">
+              <div class="stat-label">受保护端口</div>
+              <div class="stat-value" id="stat-ports">0</div>
+              <div class="stat-foot">TCP / TCP-WEB / UDP 合计</div>
+            </div>
+            <div class="stat warn">
+              <div class="stat-label">累计抓包</div>
+              <div class="stat-value" id="stat-packets">0</div>
+              <div class="stat-foot" id="stat-packets-foot">累计封停 0 次</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">最近事件<small>封停、解封与系统提示</small></div>
+            </div>
+            <div class="events" id="events"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">系统防护开关</div>
+              <div class="muted" style="font-size: 12px">切换后立即生效并写入配置</div>
+            </div>
+            <div class="card-body">
+              <div class="switches" id="quick-switches"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 当前连接 -->
+        <section class="page" id="page-connections">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">
+                当前连接<small>按来源 IP / 受保护端口统计，达到阈值即封停</small>
+              </div>
+              <div class="form-actions">
+                <input
+                  type="text"
+                  id="filter-connections"
+                  placeholder="筛选 IP 或端口"
+                  style="width: 190px"
+                />
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>来源 IP</th>
+                    <th>分组</th>
+                    <th>服务端口</th>
+                    <th>窗口次数 / 阈值</th>
+                    <th>累计</th>
+                    <th>首次出现</th>
+                    <th>最近出现</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-connections"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 封停列表 -->
+        <section class="page" id="page-bans">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">封停列表<small>每条记录对应一条 PortGuard- 防火墙规则</small></div>
+              <div class="form-actions">
+                <input
+                  type="text"
+                  id="manual-ip"
+                  placeholder="手动封停 IP，如 203.0.113.9"
+                  style="width: 210px"
+                />
+                <label class="chip" style="cursor: pointer">
+                  <input type="checkbox" id="manual-permanent" checked style="width: auto" />
+                  永久
+                </label>
+                <button class="btn primary" id="btn-manual-ban">封停</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>IP</th>
+                    <th>原因</th>
+                    <th>协议</th>
+                    <th>端口</th>
+                    <th>尝试次数</th>
+                    <th>封停时间</th>
+                    <th>剩余</th>
+                    <th>防火墙规则名</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-bans"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 设置 -->
+        <section class="page" id="page-settings">
+          <div id="settings-errors"></div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">监听网卡</div>
+              <button class="btn sm" id="btn-adapters-refresh">重新枚举</button>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="cfg-adapter">抓包网卡</label>
+                  <select id="cfg-adapter"></select>
+                  <span class="hint">只能选择在用的物理网卡 IP；虚拟网卡需在配置文件中放开</span>
+                </div>
+                <div class="field">
+                  <label for="cfg-bind">面板监听地址</label>
+                  <input type="text" id="cfg-bind" placeholder="127.0.0.1:18080" />
+                  <span class="hint">修改后需重启程序生效；建议保持仅本机回环</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">受保护端口与阈值<small>端口用英文逗号分隔</small></div>
+            </div>
+            <div class="card-body" id="protect-rows"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">封停策略</div>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="cfg-ban-duration">临时封停时长（秒）</label>
+                  <input type="number" id="cfg-ban-duration" min="60" step="60" />
+                  <span class="hint">到期自动解封并删除对应防火墙规则</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="cfg-ban-permanent" />
+                  <span class="switch-text">
+                    <b>一律永久封停</b>
+                    <span>勾选后忽略上方的时长设置</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">名单<small>每行一条；支持 1.2.3.4 / 1.2.3.0/24 / 1.2.3.* / 区间</small></div>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="cfg-whitelist">白名单（永不封停，优先级最高）</label>
+                  <textarea id="cfg-whitelist" spellcheck="false"></textarea>
+                </div>
+                <div class="field">
+                  <label for="cfg-blacklist">黑名单（出现即封停）</label>
+                  <textarea id="cfg-blacklist" spellcheck="false"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">远程桌面保护<small>按客户端计算机名放行</small></div>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <label class="switch">
+                  <input type="checkbox" id="cfg-rdp-enabled" />
+                  <span class="switch-text">
+                    <b>启用远程桌面接入保护</b>
+                    <span>不在名单内的客户端会被断开连接</span>
+                  </span>
+                </label>
+                <div class="field">
+                  <label for="cfg-rdp-list">允许的客户端计算机名</label>
+                  <textarea id="cfg-rdp-list" spellcheck="false" style="min-height: 92px"></textarea>
+                  <span class="hint">留空表示不限制接入</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">系统与日志</div>
+            </div>
+            <div class="card-body">
+              <div class="switches" id="system-switches"></div>
+              <div class="form-grid" style="margin-top: 14px">
+                <div class="field">
+                  <label for="cfg-log-level">日志级别</label>
+                  <select id="cfg-log-level">
+                    <option value="trace">trace</option>
+                    <option value="debug">debug</option>
+                    <option value="info">info</option>
+                    <option value="warn">warn</option>
+                    <option value="error">error</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="cfg-log-lines">内存中保留的日志行数</label>
+                  <input type="number" id="cfg-log-lines" min="100" step="100" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-body form-actions">
+              <button class="btn primary" id="btn-save">保存设置</button>
+              <button class="btn" id="btn-reload">放弃修改</button>
+              <span class="muted" id="save-hint"></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 日志 -->
+        <section class="page" id="page-logs">
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">运行日志</div>
+              <div class="form-actions">
+                <select id="log-filter" style="width: 130px">
+                  <option value="">全部级别</option>
+                  <option value="info">info 及以上</option>
+                  <option value="warn">warn 及以上</option>
+                  <option value="error">仅 error</option>
+                </select>
+                <label class="chip" style="cursor: pointer">
+                  <input type="checkbox" id="log-autoscroll" checked style="width: auto" />
+                  自动滚动
+                </label>
+                <span class="muted" id="log-path"></span>
+              </div>
+            </div>
+            <div class="logs" id="logs"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toasts"></div>
+
+    <div class="modal hidden" id="modal">
+      <div class="modal-box">
+        <h3 id="modal-title">确认操作</h3>
+        <p id="modal-text"></p>
+        <div class="modal-actions">
+          <button class="btn" id="modal-cancel">取消</button>
+          <button class="btn danger" id="modal-ok">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
