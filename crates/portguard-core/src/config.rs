@@ -111,22 +111,15 @@ impl Default for PanelConfig {
 }
 
 /// 网络抓包配置。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// 字段默认值（空网卡 + 不含虚拟网卡）与 `derive(Default)` 一致，故直接派生。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NetworkConfig {
     /// 选定的网卡标识（IP 字符串形式，空表示未选择）。
     pub adapter: String,
     /// 网卡列表中是否包含虚拟网卡。
     pub include_virtual: bool,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        NetworkConfig {
-            adapter: String::new(),
-            include_virtual: false,
-        }
-    }
 }
 
 /// 封停策略配置。

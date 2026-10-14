@@ -263,7 +263,13 @@ impl RuleEngine {
                         port: service_port,
                         group: PortGroup::Tcp,
                     };
-                    let out = self.record_and_judge(key, pkt.timestamp_ms);
+                    let out = self.record_and_judge(
+                        key,
+                        pkt.timestamp_ms,
+                        PortGroup::Tcp,
+                        self.tcp_rule.window_ms(),
+                        self.tcp_rule.max_attempts,
+                    );
                     if out.should_ban() {
                         return out;
                     }
@@ -275,7 +281,13 @@ impl RuleEngine {
                         port: service_port,
                         group: PortGroup::Web,
                     };
-                    let out = self.record_and_judge_web(web_key, pkt.timestamp_ms);
+                    let out = self.record_and_judge(
+                        web_key,
+                        pkt.timestamp_ms,
+                        PortGroup::Web,
+                        self.web_rule.window_ms(),
+                        self.web_rule.max_attempts,
+                    );
                     if out.should_ban() {
                         return out;
                     }
@@ -297,24 +309,13 @@ impl RuleEngine {
                     port: service_port,
                     group: PortGroup::Udp,
                 };
-                let window = self.udp_rule.window_ms();
-                let threshold = self.udp_rule.max_attempts;
-                let count = self.tracker.record(key, pkt.timestamp_ms, window);
-                self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
-                if count > threshold {
-                    self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
-                    Outcome::ThresholdBan {
-                        group: PortGroup::Udp,
-                        count,
-                        threshold,
-                    }
-                } else {
-                    Outcome::Tracking {
-                        group: PortGroup::Udp,
-                        count,
-                        threshold,
-                    }
-                }
+                self.record_and_judge(
+                    key,
+                    pkt.timestamp_ms,
+                    PortGroup::Udp,
+                    self.udp_rule.window_ms(),
+                    self.udp_rule.max_attempts,
+                )
             }
             Protocol::Icmp => Outcome::Ignored {
                 reason: "icmp_unsupported",
@@ -322,44 +323,31 @@ impl RuleEngine {
         }
     }
 
-    /// 记录 TCP 组事件并判定。
-    fn record_and_judge(&mut self, key: TrackKey, now_ms: u64) -> Outcome {
-        let window = self.tcp_rule.window_ms();
-        let threshold = self.tcp_rule.max_attempts;
+    /// 记录一次事件并按所属组判定。
+    ///
+    /// TCP / TCP-WEB / UDP 三组的判定逻辑完全一致，只差「用哪组阈值」与
+    /// 「归入哪个组」，故合并为单一实现：三份平行代码各自演化容易埋下行为偏差。
+    /// 窗口与阈值由调用方传入，避免在持有 `&mut self.tracker` 时再借 `self.*_rule`。
+    fn record_and_judge(
+        &mut self,
+        key: TrackKey,
+        now_ms: u64,
+        group: PortGroup,
+        window: u64,
+        threshold: u32,
+    ) -> Outcome {
         let count = self.tracker.record(key, now_ms, window);
         self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
         if count > threshold {
             self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
             Outcome::ThresholdBan {
-                group: PortGroup::Tcp,
+                group,
                 count,
                 threshold,
             }
         } else {
             Outcome::Tracking {
-                group: PortGroup::Tcp,
-                count,
-                threshold,
-            }
-        }
-    }
-
-    /// 记录 WEB 组事件并判定。
-    fn record_and_judge_web(&mut self, key: TrackKey, now_ms: u64) -> Outcome {
-        let window = self.web_rule.window_ms();
-        let threshold = self.web_rule.max_attempts;
-        let count = self.tracker.record(key, now_ms, window);
-        self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
-        if count > threshold {
-            self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
-            Outcome::ThresholdBan {
-                group: PortGroup::Web,
-                count,
-                threshold,
-            }
-        } else {
-            Outcome::Tracking {
-                group: PortGroup::Web,
+                group,
                 count,
                 threshold,
             }

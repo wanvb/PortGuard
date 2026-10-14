@@ -76,7 +76,7 @@ impl ConfigStore {
     pub fn load_or_create(&self) -> Result<(Config, LoadOutcome)> {
         if !self.path.exists() {
             let cfg = Config::with_defaults();
-            self.write_template(&cfg)?;
+            self.save(&cfg)?;
             return Ok((cfg, LoadOutcome::CreatedDefault));
         }
 
@@ -88,7 +88,7 @@ impl ConfigStore {
             Err(_) => {
                 let backup = self.backup_broken()?;
                 let cfg = Config::with_defaults();
-                self.write_template(&cfg)?;
+                self.save(&cfg)?;
                 Ok((cfg, LoadOutcome::RecoveredFromBroken(backup)))
             }
         }
@@ -113,14 +113,7 @@ impl ConfigStore {
 
         let mut text = String::from(TEMPLATE_HEADER);
         text.push_str(&cfg.to_toml()?);
-
-        let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, text)
-            .map_err(|e| AppError::Config(format!("写入临时文件 {} 失败：{}", tmp.display(), e)))?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| {
-            AppError::Config(format!("替换 {} 失败：{}", self.path.display(), e))
-        })?;
-        Ok(())
+        write_atomic(&self.path, &text)
     }
 
     /// 把损坏的配置文件改名备份，返回备份路径。
@@ -134,25 +127,18 @@ impl ConfigStore {
         })?;
         Ok(backup)
     }
+}
 
-    /// 以「模板 + 原子替换」的方式落盘默认配置。
-    fn write_template(&self, cfg: &Config) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            if !dir.as_os_str().is_empty() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| AppError::Config(format!("创建目录 {} 失败：{}", dir.display(), e)))?;
-            }
-        }
-        let mut text = String::from(TEMPLATE_HEADER);
-        text.push_str(&cfg.to_toml()?);
-        let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &text)
-            .map_err(|e| AppError::Config(format!("写入 {} 失败：{}", tmp.display(), e)))?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| {
-            AppError::Config(format!("替换 {} 失败：{}", self.path.display(), e))
-        })?;
-        Ok(())
-    }
+/// 原子写入：先写同目录临时文件再 rename 覆盖。
+///
+/// 直接截断写目标文件的话，进程在写一半时被强杀会留下半截 TOML，
+/// 下次启动就会走「配置损坏」的恢复路径。
+fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)
+        .map_err(|e| AppError::Config(format!("写入临时文件 {} 失败：{}", tmp.display(), e)))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| AppError::Config(format!("替换 {} 失败：{}", path.display(), e)))
 }
 
 #[cfg(test)]

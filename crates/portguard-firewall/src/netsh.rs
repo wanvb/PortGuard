@@ -11,7 +11,7 @@
 //! 3. **检查退出码与 stderr**，失败如实返回 `AppError::Firewall`；
 //! 4. **删除前校验归属**：只允许删除 `PortGuard-` 前缀的规则（规范 8.4）。
 
-use crate::backend::{is_our_rule, FirewallBackend, RuleDirection, OWN_SYSTEM_RULES};
+use crate::backend::{is_our_rule, FirewallBackend, RuleDirection};
 use portguard_core::error::{AppError, Result};
 use portguard_core::model::{Ip, Protocol};
 
@@ -254,15 +254,6 @@ impl FirewallBackend for NetshFirewall {
         }
         Ok(())
     }
-}
-
-/// 启动自检：列出所有本程序残留的规则，供「清理孤儿规则」使用。
-pub fn collect_stale_rules(backend: &dyn FirewallBackend) -> Result<Vec<String>> {
-    let own = backend.list_own_rules()?;
-    Ok(own
-        .into_iter()
-        .filter(|n| OWN_SYSTEM_RULES.contains(&n.as_str()) || is_our_rule(n))
-        .collect())
 }
 
 #[cfg(test)]

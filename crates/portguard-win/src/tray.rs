@@ -90,6 +90,9 @@ impl Tray {
     ///
     /// - `tooltip`：鼠标悬停提示；
     /// - `icon`：`Some(ico 字节)` 时使用自带图标，`None` 时回退到系统默认图标。
+    ///
+    /// `NOTIFYICONDATAW` 字段多且需按 C 头文件顺序逐项赋值，故豁免 clippy 的建议。
+    #[allow(clippy::field_reassign_with_default)]
     pub fn create(tooltip: &str, icon: Option<&[u8]>) -> Result<Tray> {
         let (hwnd, hicon, icon_temp) = unsafe {
             let hwnd = create_hidden_window()?;
@@ -420,7 +423,9 @@ mod tests {
 
     #[test]
     fn 菜单常量不与系统消息冲突() {
-        assert!(WM_TRAYICON > WM_APP);
+        // 经 black_box 阻止常量折叠，否则该断言会被编译器直接优化掉
+        let msg_id = std::hint::black_box(WM_TRAYICON);
+        assert!(msg_id > WM_APP, "托盘消息 ID 必须落在 WM_APP 之后");
         let ids = [ID_OPEN_PANEL, ID_TOGGLE_PROTECT, ID_EXIT];
         let mut sorted: Vec<u16> = ids.to_vec();
         sorted.sort_unstable();

@@ -346,7 +346,7 @@ fn 停止服务后端口释放() {
     drop(server);
 
     // 服务停止后，新连接应立即被拒或建立后收不到任何数据
-    if let Ok(mut stream) = TcpStream::connect(&addr) {
+    if let Ok(mut stream) = TcpStream::connect(addr) {
         stream
             .set_read_timeout(Some(Duration::from_millis(500)))
             .expect("设置超时失败");

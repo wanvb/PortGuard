@@ -92,6 +92,10 @@ mod platform {
     ///
     /// 前置条件：调用进程必须具备管理员权限并已选择可用的本机 IPv4 地址。
     /// 返回 `Err` 表示监听**没有**启动成功，调用方必须如实展示。
+    ///
+    /// 这里按 C 头文件的顺序逐字段填充 Win32 结构体（`SOCKADDR_IN` 等），
+    /// 比结构体字面量更贴近 `bind` 的原始写法，因此豁免 clippy 的建议。
+    #[allow(clippy::field_reassign_with_default)]
     pub fn start<P, E>(local_ip: Ip, mut on_packet: P, mut on_error: E) -> Result<CaptureHandle>
     where
         P: FnMut(ParsedPacket) + Send + 'static,

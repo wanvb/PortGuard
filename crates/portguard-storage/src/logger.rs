@@ -231,7 +231,7 @@ fn flush_lines(
         let _ = file.flush();
         let rolled = path.with_extension("log.1");
         // 滚动失败也无妨，继续写当前文件即可。
-        if std::fs::rename(path, &rolled).is_ok() {
+        if std::fs::rename(path, rolled).is_ok() {
             if let Ok(f) = open_log(path) {
                 *file = f;
                 *written = 0;

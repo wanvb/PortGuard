@@ -64,6 +64,10 @@ impl BanManager {
     }
 
     /// 构造一条封停记录。
+    ///
+    /// 参数虽多，但每一项都是「谁、何时、因何被封」的必要上下文；
+    /// 打包成结构体只会把封停现场的信息打散到多处，反而更难核对。
+    #[allow(clippy::too_many_arguments)]
     pub fn make_record(
         &self,
         ip: Ip,

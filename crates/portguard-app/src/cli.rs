@@ -14,7 +14,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 解析后的选项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
-    /// 服务模式：由计划任务以 SYSTEM 身份启动，不自动打开浏览器。
+    /// 服务模式：由计划任务以 SYSTEM 身份启动。
+    ///
+    /// 该模式运行在会话 0，没有交互桌面，因此既不创建托盘图标，也不自动打开浏览器。
     pub service: bool,
     /// 是否启用 Web 面板。
     pub panel: bool,
@@ -55,7 +57,7 @@ pub fn help_text() -> String {
          用法：{name} [选项]\n\
          \n\
          选项：\n\
-         \x20 --service          以服务模式运行（不自动打开浏览器）\n\
+         \x20 --service          服务模式：不开浏览器、不建托盘（计划任务用）\n\
          \x20 --no-panel         不启动 Web 控制面板\n\
          \x20 --no-start         启动后不自动开始保护\n\
          \x20 --open-panel       只打开已运行实例的面板后退出\n\

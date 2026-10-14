@@ -155,22 +155,31 @@ fn run() -> i32 {
     };
 
     // ---- 托盘 ----
-    let mut tray = match portguard_win::Tray::create("PortGuard", Some(portguard_win::TRAY_ICON)) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            logger.warn(format!("托盘图标创建失败，可用 Ctrl+C 退出：{}", e));
-            None
+    // 服务模式由计划任务以 SYSTEM 身份在会话 0 启动，没有交互桌面，
+    // 此时创建托盘图标既无意义也可能失败，直接跳过。
+    let mut tray = if opts.service {
+        logger.info("服务模式：不创建托盘图标".to_string());
+        None
+    } else {
+        match portguard_win::Tray::create("PortGuard", Some(portguard_win::TRAY_ICON)) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                logger.warn(format!("托盘图标创建失败，可用 Ctrl+C 退出：{}", e));
+                None
+            }
         }
     };
 
     // ---- 开始保护 ----
+    // 规范 23：非管理员时原始套接字与防火墙都不可用，直接不启动，
+    // 而不是启动后立刻失败（否则用户看到的是一串无从下手的报错）。
     if opts.auto_start {
-        match controller.start() {
-            Ok(()) => {}
-            Err(e) => {
-                logger.error(format!("自动开始保护失败：{}", e));
-                println!("[警告] 自动开始保护失败：{}", e);
-            }
+        if !admin {
+            logger.warn("非管理员权限，已跳过自动开始保护".to_string());
+            println!("[提示] 未开始保护：请右键以管理员身份重新运行 PortGuard。\n");
+        } else if let Err(e) = controller.start() {
+            logger.error(format!("自动开始保护失败：{}", e));
+            println!("[警告] 自动开始保护失败：{}", e);
         }
     }
 
@@ -178,6 +187,13 @@ fn run() -> i32 {
         .as_ref()
         .map(|s| portguard_win::panel_url(s.addr()))
         .unwrap_or_default();
+
+    // 自动打开浏览器（可由配置关闭；服务模式下无人盯着桌面，一律不打开）
+    if should_open_browser(&cfg, opts.service, &panel_url) {
+        if let Err(e) = portguard_win::open_url(&panel_url) {
+            logger.warn(format!("自动打开浏览器失败：{}", e));
+        }
+    }
 
     print_banner(
         &panel_url,
@@ -336,6 +352,14 @@ fn ensure_adapter(controller: &Controller, logger: &Arc<Logger>) -> bool {
     }
 }
 
+/// 是否应当自动打开浏览器。
+///
+/// 三个条件缺一不可：用户在配置里开着该选项、不是服务模式（服务模式没有交互桌面）、
+/// 面板确实已启动（否则会打开一个打不开的地址）。
+fn should_open_browser(cfg: &Config, service_mode: bool, panel_url: &str) -> bool {
+    cfg.panel.auto_open_browser && !service_mode && !panel_url.is_empty()
+}
+
 /// 用默认浏览器打开控制面板。
 fn open_panel(cfg: &Config, logger: &Arc<Logger>) {
     let url = portguard_win::panel_url(&cfg.panel.bind);
@@ -386,6 +410,24 @@ mod tests {
             cfg.panel.bind.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()),
             Some(18999)
         );
+    }
+
+    #[test]
+    fn 自动打开浏览器受三条件约束() {
+        let cfg = Config::with_defaults();
+        assert!(cfg.panel.auto_open_browser, "默认应自动打开");
+        assert!(should_open_browser(&cfg, false, "http://127.0.0.1:18080"));
+
+        // 服务模式一律不打开
+        assert!(!should_open_browser(&cfg, true, "http://127.0.0.1:18080"));
+
+        // 面板未启动时不打开
+        assert!(!should_open_browser(&cfg, false, ""));
+
+        // 用户在配置里关掉后不打开
+        let mut off = Config::with_defaults();
+        off.panel.auto_open_browser = false;
+        assert!(!should_open_browser(&off, false, "http://127.0.0.1:18080"));
     }
 
     #[test]
