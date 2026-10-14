@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
 > 最后更新：2026-10-14
-> 测试规模：**264 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 测试规模：**267 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -9,16 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 88 | 完成 |
+| `portguard-core` | 89 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
 | `portguard-storage` | 19 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
-| `portguard-win` | 27 | 完成 |
+| `portguard-win` | 28 | 完成 |
 | `portguard-geo` | 18 | 完成 |
 | `portguard-web` | 33 | 完成 |
-| `portguard-app` | 32 | 完成 |
-| **合计** | **264** | — |
+| `portguard-app` | 33 | 完成 |
+| **合计** | **267** | — |
 
 ---
 
@@ -314,6 +314,44 @@
   引擎 `count_accept` 口径 4 项、运行时 4 项（被判定层丢弃的包仍入观测表、入站不可见时自动切换并真正开始跟踪、
   入站可见时不切换、用户显式设置后不再自动改写）
 - 合计 **264 项全部通过**
+
+---
+
+## Phase 19 — 隐藏控制台窗口与面板默认端口调整
+
+**背景**：程序以「控制台 + 托盘」形态启动，任务栏长期挂着一个黑窗口，与托盘图标重复；
+另外面板默认端口 18080 是各类本地调试工具的常用端口，冲突概率高。
+
+### Completed
+
+- **控制台窗口默认隐藏**（`portguard-win/console.rs`）：`hide_own_console_window()` 在
+  `GetConsoleWindow` 有窗口且 `GetConsoleProcessList` 挂载进程数为 1（即**独占**控制台，双击启动的情形）
+  时 `ShowWindow(SW_HIDE)`。从 cmd / PowerShell 启动或查询失败一律不动手 —— 否则会把用户自己的
+  终端窗口一起藏掉。隐藏后托盘图标与右键菜单（打开面板 / 暂停保护 / 退出）完全不减，
+  `Ctrl+C` / 注销 / 关机事件仍由 `SetConsoleCtrlHandler` 收到并走完整收尾
+- **`--console` 开关**：显式保留窗口，便于排查启动期问题；`--help` 与启动横幅同步说明
+- **隐藏后的错误呈现**（规范 26.1）：启动期致命错误（数据目录 / 配置 / 日志）改弹 `MessageBoxW`
+  对话框，不允许「双击没反应」；启动期告警（非管理员、自动开始保护失败）在建好托盘后改用气泡重复一次
+- **面板默认端口 58080**：`DEFAULT_PANEL_BIND` 成为唯一来源（`portguard-web::DEFAULT_BIND` 直接引用），
+  配置模板、面板占位符、帮助文本、打包脚本与文档一并更新
+- **旧配置迁移**：`Config::migrate()` 把仍等于旧默认值的 `127.0.0.1:18080` 迁移为 58080（结构版本 1 → 2），
+  与 `normalize` 分开实现；主程序启动时**立即写回 `config.toml`**（否则第二个实例会拿文件里的旧端口
+  去开面板，而运行中的实例已换到新端口）
+
+### Tests
+
+- 新增 4 项：`只在独占控制台时才隐藏窗口`（`should_hide` 纯函数，避免测试真去隐藏跑测试的终端）、
+  `默认隐藏控制台窗口`、`旧默认面板端口被迁移到新端口`（含幂等与「自定义地址不动」）、
+  `默认配置符合文档建议值` 增补端口断言
+- 合计 **267 项全部通过**（含端到端实测：旧 `bind = "127.0.0.1:18080"` 的配置启动后自动改写为
+  `config_version = 2` + `bind = "127.0.0.1:58080"`，面板在 58080 正常响应；`MainWindowHandle = 0`
+  且 `ConsoleWindowClass` 窗口 `IsWindowVisible = False`，加 `--console` 时同窗口转为可见）
+
+### Known Issues
+
+- 迁移触发的写盘会按模板重写 `config.toml`，**用户手写的注释行会丢失**（仅发生一次，模板头部已说明格式）
+- 58080 落在 Windows 默认动态端口区间（49152–65535）内，理论上可能被临时分配的出站端口占用；
+  真发生时会走既有的端口顺延（最多向后试 10 个端口）并在日志中说明
 
 ---
 

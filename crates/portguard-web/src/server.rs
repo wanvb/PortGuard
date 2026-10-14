@@ -4,7 +4,7 @@
 //! 在 Win7 上无额外系统依赖，编译产物小。
 //!
 //! 安全边界（本程序没有登录口令，因此必须靠网络位置与请求头把关）：
-//! 1. **只监听配置指定的回环地址**，默认 `127.0.0.1:18080`；
+//! 1. **只监听配置指定的回环地址**，默认 `127.0.0.1:58080`；
 //! 2. **校验 Host 头**，阻断 DNS rebinding：攻击者可以让自己的域名
 //!    解析到 127.0.0.1，再诱导浏览器访问本地面板执行封停/解封；
 //! 3. **校验 Origin 头**（变更类请求），阻断跨站表单提交；
@@ -37,7 +37,7 @@ pub struct WebServer {
 }
 
 impl WebServer {
-    /// 启动服务。`bind` 形如 `127.0.0.1:18080`。
+    /// 启动服务。`bind` 形如 `127.0.0.1:58080`。
     pub fn start(
         api: Arc<dyn PortGuardApi>,
         meta: PanelMeta,
@@ -298,9 +298,9 @@ mod tests {
 
     #[test]
     fn 来源判定只认同机() {
-        let bind = "127.0.0.1:18080";
-        assert!(origin_is_local("http://127.0.0.1:18080", bind));
-        assert!(origin_is_local("http://localhost:18080", bind));
+        let bind = "127.0.0.1:58080";
+        assert!(origin_is_local("http://127.0.0.1:58080", bind));
+        assert!(origin_is_local("http://localhost:58080", bind));
         assert!(!origin_is_local("http://evil.example.com", bind));
         assert!(!origin_is_local("null", bind));
     }

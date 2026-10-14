@@ -49,7 +49,7 @@ impl Harness {
             data_dir: dir.display().to_string(),
             started_at_ms: 1_700_000_000_000,
         };
-        // 端口 0 → 由系统分配，避免与正在运行的 PortGuard 抢 18080
+        // 端口 0 → 由系统分配，避免与正在运行的 PortGuard 抢 58080
         let server =
             WebServer::start(api, meta, "127.0.0.1:0", Arc::clone(&logger)).expect("启动面板失败");
         let last_addr = server.addr().to_string();

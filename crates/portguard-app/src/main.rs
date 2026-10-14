@@ -1,14 +1,17 @@
 //! PortGuard 主程序。
 //!
-//! 形态：控制台 + 系统托盘 + 内嵌 Web 控制面板（单 exe 部署）。
+//! 形态：托盘 + 内嵌 Web 控制面板（单 exe 部署）。
 //!
 //! 启动顺序：
 //!
 //! ```text
-//! 参数 → 数据目录 → 配置 → 日志 → 单实例 → 权限提示
+//! 参数 → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示
 //!      → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护
 //!      → 消息循环（托盘 / Ctrl+C）→ 收尾
 //! ```
+//!
+//! 控制台窗口默认隐藏（`--console` 或从 cmd 启动时保留）：任务栏只留托盘图标，
+//! 右键菜单仍可打开面板 / 暂停保护 / 退出；启动期的致命错误改用对话框提示。
 
 // 非测试代码禁止 unwrap/expect（规范 26：失败必须显式处理）。
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
@@ -57,22 +60,24 @@ fn run() -> i32 {
         }
     };
 
+    // ---- 控制台窗口 ----
+    // 越早越好：窗口创建到隐藏之间的这段时间是用户唯一会看到黑窗口的时刻。
+    let console_hidden = !opts.console && portguard_win::hide_own_console_window();
+
     // ---- 数据目录与配置 ----
     let paths = match &opts.data_dir {
         Some(dir) => AppPaths::with_root(dir.clone()),
         None => AppPaths::resolve(),
     };
     if let Err(e) = paths.ensure() {
-        eprintln!("数据目录不可用：{}", e);
-        return 1;
+        return fail(&format!("数据目录不可用：{}", e), console_hidden, 1);
     }
 
     let store = ConfigStore::new(paths.config_file());
     let (mut cfg, outcome) = match store.load_or_create() {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("配置读取失败：{}", e);
-            return 1;
+            return fail(&format!("配置读取失败：{}", e), console_hidden, 1);
         }
     };
 
@@ -84,13 +89,26 @@ fn run() -> i32 {
     ) {
         Ok(l) => Arc::new(l),
         Err(e) => {
-            eprintln!("日志初始化失败：{}", e);
-            return 1;
+            return fail(&format!("日志初始化失败：{}", e), console_hidden, 1);
         }
     };
     logger.info(format!("PortGuard {} 启动", cli::VERSION));
     if outcome.is_recovery() {
         logger.warn(outcome.describe());
+    }
+
+    // ---- 旧配置迁移 ----
+    // 迁移结果必须落盘：只改内存的话，第二个实例会照着文件里的旧端口去开面板，
+    // 而正在运行的实例已经换到新端口，用户看到的就是「页面打不开」。
+    // 写盘失败只告警不退出 —— 迁移本身已经生效，程序照常可用。
+    let migrations = cfg.migrate();
+    if !migrations.is_empty() {
+        if let Err(e) = store.save(&cfg) {
+            logger.warn(format!("配置迁移结果写盘失败（本次运行仍然生效）：{}", e));
+        }
+        for note in migrations {
+            logger.info(format!("配置迁移：{}", note));
+        }
     }
 
     // ---- 单实例 ----
@@ -108,12 +126,16 @@ fn run() -> i32 {
         return 0;
     }
 
+    // 需要在托盘上向用户交代的启动期告警（控制台隐藏时那是唯一的送达渠道）
+    let mut notices: Vec<(&str, String)> = Vec::new();
+
     // ---- 权限 ----
     let admin = portguard_win::is_elevated();
     if !admin {
         let tip = "当前不是管理员权限：抓包与防火墙封停都无法生效，请右键以管理员身份运行";
         logger.error(tip.to_string());
         println!("\n[警告] {}\n", tip);
+        notices.push(("需要管理员权限", tip.to_string()));
     }
 
     let _ = portguard_win::install_exit_handler();
@@ -181,6 +203,17 @@ fn run() -> i32 {
         } else if let Err(e) = controller.start() {
             logger.error(format!("自动开始保护失败：{}", e));
             println!("[警告] 自动开始保护失败：{}", e);
+            notices.push(("自动开始保护失败", e.to_string()));
+        }
+    }
+
+    // 控制台隐藏后，上面这些告警在终端里看不见，改用托盘气泡再送一次；
+    // 服务模式（会话 0）没有托盘，只能靠日志与面板呈现。
+    if console_hidden {
+        if let Some(t) = tray.as_mut() {
+            for (title, text) in &notices {
+                t.balloon(title, text);
+            }
         }
     }
 
@@ -258,6 +291,19 @@ fn run() -> i32 {
     drop(tray);
     logger.info("PortGuard 已退出".to_string());
     0
+}
+
+/// 启动期致命错误的汇报方式。
+///
+/// 控制台窗口可见时打印即可；已隐藏时必须弹对话框 —— 否则用户看到的现象是
+/// 「双击了，什么都没发生」（规范 26.1：失败不得静默）。
+fn fail(message: &str, console_hidden: bool, code: i32) -> i32 {
+    if console_hidden {
+        portguard_win::show_error("PortGuard 启动失败", message);
+    } else {
+        eprintln!("{}", message);
+    }
+    code
 }
 
 /// 启动控制面板；端口被占用时自动向后顺延，保证程序总能起来。
@@ -385,6 +431,7 @@ fn print_banner(panel_url: &str, data_dir: &str, admin: bool) {
         if admin { "管理员" } else { "普通用户（功能受限）" }
     );
     println!("  退出方式：托盘右键退出，或按 Ctrl+C");
+    println!("  提示：加 --console 启动可保留本窗口，便于排查问题");
     println!();
 }
 
@@ -413,10 +460,10 @@ mod tests {
     fn 自动打开浏览器受三条件约束() {
         let cfg = Config::with_defaults();
         assert!(cfg.panel.auto_open_browser, "默认应自动打开");
-        assert!(should_open_browser(&cfg, false, "http://127.0.0.1:18080"));
+        assert!(should_open_browser(&cfg, false, "http://127.0.0.1:58080"));
 
         // 服务模式一律不打开
-        assert!(!should_open_browser(&cfg, true, "http://127.0.0.1:18080"));
+        assert!(!should_open_browser(&cfg, true, "http://127.0.0.1:58080"));
 
         // 面板未启动时不打开
         assert!(!should_open_browser(&cfg, false, ""));
@@ -424,7 +471,7 @@ mod tests {
         // 用户在配置里关掉后不打开
         let mut off = Config::with_defaults();
         off.panel.auto_open_browser = false;
-        assert!(!should_open_browser(&off, false, "http://127.0.0.1:18080"));
+        assert!(!should_open_browser(&off, false, "http://127.0.0.1:58080"));
     }
 
     #[test]

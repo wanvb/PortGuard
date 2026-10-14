@@ -97,11 +97,20 @@ pub struct PanelConfig {
     pub auto_open_browser: bool,
 }
 
+/// 面板默认监听地址。
+///
+/// 结构版本 2 起改用 58080：18080 是各类本地调试工具的常用端口，
+/// 冲突概率高（端口顺延虽能救急，但用户按文档访问就会打不开）。
+pub const DEFAULT_PANEL_BIND: &str = "127.0.0.1:58080";
+
+/// 结构版本 1 的面板默认监听地址，仅用于升级迁移。
+const LEGACY_PANEL_BIND: &str = "127.0.0.1:18080";
+
 impl Default for PanelConfig {
     fn default() -> Self {
         PanelConfig {
             enabled: true,
-            bind: "127.0.0.1:18080".to_string(),
+            bind: DEFAULT_PANEL_BIND.to_string(),
             auto_open_browser: true,
         }
     }
@@ -319,6 +328,27 @@ impl Config {
         }
     }
 
+    /// 把旧版本留下的默认值迁移到当前默认值，返回每条迁移的中文说明（无迁移则为空）。
+    ///
+    /// 目前只有一条：面板监听地址 `127.0.0.1:18080` → `127.0.0.1:58080`。
+    /// 18080 是各类本地调试工具的常用端口，冲突概率高；凡是仍停在该地址的配置
+    /// 一律跟着新默认值走（刻意保留 18080 的写法不再支持，换个端口即可）。
+    ///
+    /// 与 [`Config::normalize`] 分开是有意为之：迁移只改内存，是否落盘由调用方决定。
+    /// 主程序启动时会把迁移结果立即写回配置文件——只改内存的话，第二个实例会拿着
+    /// 文件里的旧端口去开面板，而正在运行的实例已经换到新端口了。
+    pub fn migrate(&mut self) -> Vec<String> {
+        let mut done = Vec::new();
+        if self.panel.bind == LEGACY_PANEL_BIND {
+            self.panel.bind = PanelConfig::default().bind;
+            done.push(format!(
+                "面板监听地址 {} → {}（旧端口与其它软件冲突概率高）",
+                LEGACY_PANEL_BIND, self.panel.bind
+            ));
+        }
+        done
+    }
+
     /// 校验，返回人类可读的中文错误信息列表。
     pub fn validate(&self) -> Vec<String> {
         let mut errs = Vec::new();
@@ -330,7 +360,8 @@ impl Config {
         }
         if self.panel.enabled && self.panel.bind.parse::<std::net::SocketAddr>().is_err() {
             errs.push(format!(
-                "面板监听地址非法（应为 IP:端口，如 127.0.0.1:18080）：{}",
+                "面板监听地址非法（应为 IP:端口，如 {}）：{}",
+                DEFAULT_PANEL_BIND,
                 self.panel.bind
             ));
         }
@@ -354,7 +385,10 @@ impl Config {
 }
 
 /// 当前配置结构版本号。
-pub const CURRENT_CONFIG_VERSION: u32 = 1;
+///
+/// - 1：初版（面板默认端口 `127.0.0.1:18080`）
+/// - 2：面板默认端口改为 [`DEFAULT_PANEL_BIND`]（`127.0.0.1:58080`），加载时迁移旧值
+pub const CURRENT_CONFIG_VERSION: u32 = 2;
 
 /// 清洗规则行：去空白、去空行、去注释行。
 fn normalize_rule_lines(lines: &[String]) -> Vec<String> {
@@ -375,8 +409,35 @@ mod tests {
         assert_eq!(c.protect.tcp.ports, vec![3389]);
         assert_eq!(c.protect.http.ports, vec![80, 443]);
         assert_eq!(c.ban.duration_seconds, 3600);
-        assert_eq!(c.panel.bind, "127.0.0.1:18080");
+        assert_eq!(c.panel.bind, DEFAULT_PANEL_BIND);
+        assert_eq!(c.panel.bind, "127.0.0.1:58080");
         assert!(c.validate().is_empty());
+    }
+
+    #[test]
+    fn 旧默认面板端口被迁移到新端口() {
+        // 手写局部配置
+        let mut partial = Config::from_toml("[panel]\nbind = \"127.0.0.1:18080\"\n").unwrap();
+        let done = partial.migrate();
+        assert_eq!(partial.panel.bind, "127.0.0.1:58080");
+        assert_eq!(done.len(), 1, "迁移必须如实上报：{:?}", done);
+
+        // 老版本写下的完整配置（config_version = 1）
+        let mut old = Config::from_toml("config_version = 1\n[panel]\nbind = \"127.0.0.1:18080\"\n")
+            .unwrap();
+        assert!(!old.migrate().is_empty());
+        assert_eq!(old.panel.bind, "127.0.0.1:58080");
+        old.normalize();
+        assert_eq!(old.config_version, CURRENT_CONFIG_VERSION);
+
+        // 用户自己定过的地址一律不动
+        let mut custom = Config::from_toml("config_version = 1\n[panel]\nbind = \"127.0.0.1:19000\"\n")
+            .unwrap();
+        assert!(custom.migrate().is_empty());
+        assert_eq!(custom.panel.bind, "127.0.0.1:19000");
+
+        // 迁移幂等：再跑一次无事发生
+        assert!(partial.migrate().is_empty());
     }
 
     #[test]

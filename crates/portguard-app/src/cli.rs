@@ -26,6 +26,12 @@ pub struct Options {
     pub data_dir: Option<PathBuf>,
     /// 立即开始保护（默认开启，`--no-start` 可关闭以便只开面板）。
     pub auto_start: bool,
+    /// 保留控制台窗口。
+    ///
+    /// 默认为 `false`：双击启动时把控制台窗口隐藏掉，任务栏只留托盘图标，
+    /// 输出改由日志文件与控制面板承载。加 `--console` 或从 cmd 启动时
+    /// 仍然保留窗口，便于排查启动期问题。
+    pub console: bool,
 }
 
 impl Default for Options {
@@ -36,6 +42,7 @@ impl Default for Options {
             open_only: false,
             data_dir: None,
             auto_start: true,
+            console: false,
         }
     }
 }
@@ -58,6 +65,7 @@ pub fn help_text() -> String {
          \n\
          选项：\n\
          \x20 --service          服务模式：不开浏览器、不建托盘（计划任务用）\n\
+         \x20 --console          保留控制台窗口（默认隐藏，只留托盘图标）\n\
          \x20 --no-panel         不启动 Web 控制面板\n\
          \x20 --no-start         启动后不自动开始保护\n\
          \x20 --open-panel       只打开已运行实例的面板后退出\n\
@@ -65,7 +73,7 @@ pub fn help_text() -> String {
          \x20 -h, --help         显示本帮助\n\
          \x20 -V, --version      显示版本号\n\
          \n\
-         启动后浏览器访问 http://127.0.0.1:18080 查看与控制。",
+         启动后浏览器访问 http://127.0.0.1:58080 查看与控制。",
         name = NAME,
         version = VERSION
     )
@@ -85,6 +93,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed> {
             // 服务模式下由计划任务在开机时拉起，无人盯着控制台，
             // 因此主程序会跳过「自动打开浏览器」这一步
             "--service" => opts.service = true,
+            "--console" => opts.console = true,
             "--no-panel" => opts.panel = false,
             "--no-start" => opts.auto_start = false,
             "--open-panel" => opts.open_only = true,
@@ -137,6 +146,13 @@ mod tests {
         assert!(!parse_ok(&["--no-start"]).auto_start);
         assert!(parse_ok(&["--service"]).service);
         assert!(parse_ok(&["--open-panel"]).open_only);
+        assert!(parse_ok(&["--console"]).console);
+    }
+
+    #[test]
+    fn 默认隐藏控制台窗口() {
+        assert!(!parse_ok(&[]).console, "默认应隐藏黑窗口，只留托盘图标");
+        assert!(help_text().contains("--console"));
     }
 
     #[test]

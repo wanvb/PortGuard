@@ -361,13 +361,13 @@ mod tests {
 
     #[test]
     fn 主机校验只接受回环() {
-        let bind = "127.0.0.1:18080";
-        assert!(host_allowed("127.0.0.1:18080", bind));
-        assert!(host_allowed("LOCALHOST:18080", bind));
-        assert!(host_allowed("localhost:18080", bind));
-        assert!(host_allowed("[::1]:18080", bind));
+        let bind = "127.0.0.1:58080";
+        assert!(host_allowed("127.0.0.1:58080", bind));
+        assert!(host_allowed("LOCALHOST:58080", bind));
+        assert!(host_allowed("localhost:58080", bind));
+        assert!(host_allowed("[::1]:58080", bind));
         // DNS rebinding 场景：攻击者域名解析到 127.0.0.1，Host 头仍是攻击者域名
-        assert!(!host_allowed("evil.example.com:18080", bind));
+        assert!(!host_allowed("evil.example.com:58080", bind));
         assert!(!host_allowed("127.0.0.1:9999", bind), "端口不符必须拒绝");
         assert!(!host_allowed("", bind));
     }

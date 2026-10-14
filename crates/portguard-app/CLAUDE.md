@@ -1,22 +1,26 @@
 # portguard-app 模块规范
 
 ## 职责
-- 主程序（可执行文件 `PortGuard.exe`），形态为「控制台 + 系统托盘 + 内嵌 Web 控制面板」单 exe 部署。
+- 主程序（可执行文件 `PortGuard.exe`），形态为「系统托盘 + 内嵌 Web 控制面板」单 exe 部署（控制台窗口默认隐藏，`--console` 可保留）。
 - 编排启动顺序、驱动主循环、执行退出收尾。
 - `cli`：解析命令行开关；`runtime`：抓包判定 → 队列 → 执行线程的运行期业务回路；`controller`：`PortGuardApi` 实现，把状态翻译成面板视图、把操作翻译成后台动作与配置落盘。
 - 不做什么：不直接实现抓包解析、防火墙规则或 Win32 细节，全部委托给对应 crate。
 
 ## 对外接口
-- `cli::NAME` / `VERSION`：程序名与版本；`Options{service, panel, open_only, data_dir, auto_start}`；`Parsed::Run(Options)` / `Parsed::Print(String)`；`help_text()`、`parse<I>(args) -> Result<Parsed>`。
+- `cli::NAME` / `VERSION`：程序名与版本；`Options{service, panel, open_only, data_dir, auto_start, console}`；`Parsed::Run(Options)` / `Parsed::Print(String)`；`help_text()`、`parse<I>(args) -> Result<Parsed>`。
+- `main::fail(message, console_hidden, code)`：启动期致命错误按「控制台可见性」选打印还是弹对话框。
 - `runtime::RuntimeHandle`：`new(config, logger, firewall, paths)`、`read(f)`、`config()`、`started_at_ms()`、`data_dir()`、`enqueue(Action) -> bool`、`persist_bans()`、`start() -> Result<()>`、`stop()`、`select_adapter(ip) -> Result<()>`、`apply_config(cfg) -> Result<()>`、`logs(limit)`。
 - `runtime::Action`：`Ban(BanRequest)` / `Unban(Ip)` / `SyncSystemRules`；`BanRequest{ip, reason, protocol, service_port, remote_port, attempt_count, permanent_override}`。
 - `runtime::Inner`：共享运行状态（config / engine / bans / events / capture / local_ip / observer 等），同一把锁下保证快照一致；另提供 `capture_diagnostics`、`count_accept`、`reset_observer`。
 - `runtime::OBSERVE_TOP_LIMIT`：面板「抓包观测」展示条数（12）。
 - `controller::Controller`：`new(rt, paths, logger)`，实现 `PortGuardApi`（status / connections / bans / config / save_config / start / stop / ban_ip / unban_ip / 名单增删 / logs / events / adapters / select_adapter / set_protection / data_dir）；额外持有 `RwLock<GeoLookup>`（地理位置展示，`reload_geo` / `location_of` / `with_geo`）。
-- `main`：`fn main()`（无参入口，`std::process::exit(run())`）。
+- `main`：`fn main()`（无参入口，`std::process::exit(run())`）；`fail()` 统一处理启动期致命错误的呈现方式。
 
 ## 关键约束
-- **启动顺序固定**：参数 → 数据目录 → 配置 → 日志 → 单实例 → 权限提示 → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护 → 主循环 → 收尾。
+- **启动顺序固定**：参数 → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示 → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护 → 主循环 → 收尾。
+- **控制台窗口默认隐藏**（`cli.Options.console == false`）：`portguard_win::hide_own_console_window()` 只在控制台独占本进程时动手，从 cmd 启动或加 `--console` 时保留窗口。隐藏判定必须放在最前（越早越小概率看到黑窗口闪烁），且隐藏后启动期的致命错误一律走 `fail` 的对话框分支 —— 否则表现为「双击没反应」（规范 26.1）。托盘形态不变：右键菜单照旧提供打开面板 / 暂停保护 / 退出。
+- **启动期告警在隐藏控制台后改走托盘气泡**：非管理员、自动开始保护失败两条都写进 `notices`，托盘建好后逐个 `balloon`；服务模式（会话 0）没有托盘，只留日志与面板。
+- **旧配置迁移必须落盘**：`Config::migrate()` 只改内存，主程序拿到非空结果后立即 `store.save`（写盘失败只告警不退出，迁移在本次运行仍然生效）。不落盘的话，第二个实例会拿文件里的旧端口去开面板，而运行中的实例已换到新端口，用户看到的就是「页面打不开」。
 - **抓包线程只做锁内判定 + 入队**（规范 42 / 19）：`PacketSink::consume` 在锁内更新计数、`engine.evaluate`、必要时 `tx.send(Action::Ban)`，绝不调用防火墙或写文件；netsh 与落盘全部交给 `portguard-worker` 执行线程串行完成。
 - **失败不得假装成功**（规范 26.1）：`apply_ban` 先 `firewall.block_ip` 成功后才更新内存状态，失败则移除 `pending` 并写 error 事件 + 日志；到期解封删除规则失败时保持内存不变，让用户看到真实差异。
 - **封停后不删除跟踪行**：`apply_ban` 只更新 `bans`，跟踪表记录保留，`Inner::connection_rows` 依 `bans.is_banned` 把状态标为 `BANNED` / `PERMANENT`，用户仍能看到该 IP 打的是哪个端口、累计多少次；行本身按 5 分钟 TTL 与 10 分钟保留期自然回收。
@@ -36,8 +40,8 @@
 
 ## 测试
 - 位置：内联 `#[cfg(test)] mod tests`（`cli.rs` / `main.rs` / `controller.rs` / `runtime.rs`）。
-- 关键用例：`默认选项符合预期` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长` / `封停后跟踪行保留并标记状态` / `保护端口为空时启动会写入告警事件` / `观测表记录被判定层丢弃的包` / `入站不可见时自动改用握手响应` / `入站可见时不做自动切换` / `用户显式设置后不再自动改写`。
-- 测试数量：32 个 `#[test]`（cli 6、main 3、controller 11、runtime 12）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
+- 关键用例：`默认选项符合预期` / `默认隐藏控制台窗口` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长` / `封停后跟踪行保留并标记状态` / `保护端口为空时启动会写入告警事件` / `观测表记录被判定层丢弃的包` / `入站不可见时自动改用握手响应` / `入站可见时不做自动切换` / `用户显式设置后不再自动改写`。
+- 测试数量：33 个 `#[test]`（cli 7、main 3、controller 11、runtime 12）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
 
 ## 依赖关系
 - 依赖：`portguard-core`、`portguard-packet`、`portguard-firewall`、`portguard-storage`、`portguard-win`、`portguard-rdp`、`portguard-geo`、`portguard-web`，以及 `serde` / `serde_json` / `thiserror` / `windows`。

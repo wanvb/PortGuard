@@ -8,6 +8,7 @@
 //! - `browser`         —— 打开控制面板地址
 //! - `autostart`       —— 计划任务开机自启
 //! - `tray`            —— 系统托盘图标与菜单
+//! - `console`         —— 控制台退出信号接管、窗口隐藏与错误对话框
 //!
 //! 本层不包含抓包（`portguard-packet`）与防火墙（`portguard-firewall`），
 //! 避免职责重叠。
@@ -28,7 +29,9 @@ pub mod winerr;
 pub use admin::is_elevated;
 pub use autostart::Autostart;
 pub use browser::{open_url, panel_url};
-pub use console::{enable_utf8_output, exit_requested, install_exit_handler};
+pub use console::{
+    enable_utf8_output, exit_requested, hide_own_console_window, install_exit_handler, show_error,
+};
 pub use single_instance::SingleInstance;
 pub use tray::{Tray, TrayAction, WM_TRAYICON};
 

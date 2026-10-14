@@ -101,7 +101,7 @@ if not exist "%EXE%" (
 )
 echo.
 echo  [运行] 以管理员身份启动（抓包与防火墙封停需要提升权限）
-echo         面板地址：http://127.0.0.1:18080
+echo         面板地址：http://127.0.0.1:58080
 echo.
 powershell -NoProfile -Command "Start-Process -FilePath '%EXE%' -Verb RunAs"
 if errorlevel 1 echo  [错误] 提权启动失败，请手动右键 PortGuard.exe 以管理员身份运行
@@ -152,7 +152,7 @@ echo.
 echo  部署步骤：
 echo     1. 把整个 dist 目录拷到服务器任意位置（绿色部署，无需安装）
 echo     2. 右键 dist\PortGuard.exe，以管理员身份运行
-echo     3. 浏览器打开面板：http://127.0.0.1:18080
+echo     3. 浏览器打开面板：http://127.0.0.1:58080
 echo     4. config.toml、state、logs 首次运行自动生成
 echo.
 echo  注意：Windows 7 / 2008 R2 / 2012 若提示缺少 DLL，

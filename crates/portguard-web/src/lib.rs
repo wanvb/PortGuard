@@ -25,4 +25,6 @@ pub use router::{PanelMeta, Reply};
 pub use server::WebServer;
 
 /// 面板默认监听地址。
-pub const DEFAULT_BIND: &str = "127.0.0.1:18080";
+///
+/// 与 `PanelConfig::default()` 同源，避免两处字面量各写一份后悄悄分叉。
+pub const DEFAULT_BIND: &str = portguard_core::config::DEFAULT_PANEL_BIND;

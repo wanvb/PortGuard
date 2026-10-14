@@ -8,7 +8,7 @@
 - 不做什么：只通过 `portguard_core::api::PortGuardApi` 与业务交互，不认识抓包、防火墙与地理位置库内部结构（规范 18 UI/Core 解耦）；不含登录鉴权。
 
 ## 对外接口
-- `DEFAULT_BIND: &str`：`"127.0.0.1:18080"`。
+- `DEFAULT_BIND: &str`：`"127.0.0.1:58080"`，直接取 `portguard_core::config::DEFAULT_PANEL_BIND`（同源，勿另写字面量）。
 - `Reply`：`Json` / `Asset{mime, body}` / `NoContent` / `Error{status, message}`；`json`、`from_serializable`、`bad_request`、`status()`、`body()`。
 - `PanelMeta`：`version` / `log_file` / `data_dir` / `started_at_ms`，面板运行期元信息。
 - `allowed_hosts(bind) -> Vec<String>` / `host_allowed(host, bind) -> bool`：回环 Host 白名单与判定。
@@ -18,7 +18,7 @@
 - 路由接口：`GET /api/state|status|connections|bans|config|adapters|logs|events|meta`；`POST /api/start|stop|ban|unban|lists/add|lists/remove|adapter|protection|config`。
 
 ## 关键约束
-- **只监听回环**：默认 `127.0.0.1:18080`，面板无登录口令，安全完全依赖网络位置与请求头。
+- **只监听回环**：默认 `127.0.0.1:58080`，面板无登录口令，安全完全依赖网络位置与请求头。
 - **Host 校验**：`host_allowed` 只放行 `bind` / `127.0.0.1` / `localhost` / `[::1]` 且端口必须一致，阻断 DNS rebinding；缺失 Host 或非本机 Host 一律 403 并写日志。
 - **Origin 校验**：仅对变更类（POST）请求，`origin_is_local` 比较主机与端口，拒绝跨站表单提交。
 - **请求体上限**：`MAX_BODY = 1 MiB`，超限或未声明长度时用 `take` 限制实际读取量，防御超大请求撑爆内存；错误以 `{"error":"中文说明"}` 返回。

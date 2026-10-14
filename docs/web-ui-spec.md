@@ -9,7 +9,7 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 默认地址 | `http://127.0.0.1:18080` |
+| 默认地址 | `http://127.0.0.1:58080` |
 | 默认绑定 | `127.0.0.1`（仅回环） |
 | 端口占用 | 启动时自动向后顺延，最多尝试 10 个端口，并在日志中告警 |
 | 认证 | **无口令**，安全性由「只监听回环 + 请求头校验」保证 |
@@ -127,7 +127,7 @@
 ```json
 {
   "running": true, "adapter": "192.168.1.8", "local_ip": "192.168.1.8",
-  "panel_bind": "127.0.0.1:18080", "admin": true, "capture_ready": true,
+  "panel_bind": "127.0.0.1:58080", "admin": true, "capture_ready": true,
   "stats": {"tracking": 0, "banned": 1, "permanent": 1,
             "captured_packets": 1262, "total_bans": 0, "uptime_seconds": 4,
             "ignored": {"not_local": 0, "outbound": 0, "not_new_connection": 0,
