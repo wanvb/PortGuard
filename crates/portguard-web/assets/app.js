@@ -570,8 +570,9 @@ function collectSettings() {
   base.network.adapter = netAdapter;
 
   for (const g of PROTECT_GROUPS) {
-    const ports = collectPorts(g.key);
-    base.protect[g.key].ports = ports;
+    // collectPorts 返回 { ports, error }，只取 ports；整对象赋给后端会因
+    // 「map 喂给 Vec<u16>」而报请求体格式错误
+    base.protect[g.key].ports = collectPorts(g.key).ports;
     base.protect[g.key].window_seconds = collectNumber(g.key, "window_seconds");
     base.protect[g.key].max_attempts = collectNumber(g.key, "max_attempts");
   }
