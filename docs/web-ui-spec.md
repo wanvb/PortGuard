@@ -55,6 +55,8 @@
 ### 2.1 概览
 
 - 四个统计卡：跟踪中 IP、已封停 IP（副标：其中永久 N）、受保护端口、累计抓包（副标：累计封停 N 次）
+  - 「受保护端口」卡片的副标必须直接列出三组端口（如 `TCP 3389 · WEB 80,443 · UDP 3389`），不能只给一个总数；三组全空时显示「三组均未设置，不会统计与封停」
+- **判定明细**卡片：五项忽略计数（非本机流量、本机外连、非新建连接、端口未保护、ICMP），各带一句成因说明，数据来自 `status.stats.ignored`
 - **最近事件**列表：封停、解封与系统提示
 - **系统防护开关**：危险端口保护 / 禁止 Ping / 开机自启 / RDP 客户端保护，直接调 `/api/protection`
 
@@ -65,6 +67,7 @@
 - 顶部搜索框按 IP / 地理位置 / 端口过滤（前端过滤）
 - 地理位置列来自 `ConnectionView.location`，只用于展示（规范 22），查询不到显示「未知」
 - 数据来自 `/api/connections`，只保留最近 5 分钟内活跃的记录，按窗口次数降序
+- 封停成功的 IP **不会被移出列表**，其状态显示为 `BANNED`（永久为 `PERMANENT`），便于看清封停前它在打哪个端口；行仍按 5 分钟 TTL 自然消失
 
 ### 2.3 封停列表
 
@@ -81,6 +84,7 @@
 
 - 保存时整体提交 `POST /api/config`
 - 校验失败的字段以中文错误列表显示在页面顶部，**失败时不清空用户已填内容**
+- 三组保护端口全空时服务端返回 400（文案含「保护端口为空」），前端按普通校验错误展示
 - 名单规则格式提示：`192.168.1.1`、`192.168.1.1-192.168.1.100`、`192.168.1.*`
 
 ### 2.5 运行日志
@@ -121,7 +125,9 @@
   "running": true, "adapter": "192.168.1.8", "local_ip": "192.168.1.8",
   "panel_bind": "127.0.0.1:18080", "admin": true, "capture_ready": true,
   "stats": {"tracking": 0, "banned": 1, "permanent": 1,
-            "captured_packets": 1262, "total_bans": 0, "uptime_seconds": 4},
+            "captured_packets": 1262, "total_bans": 0, "uptime_seconds": 4,
+            "ignored": {"not_local": 0, "outbound": 0, "not_new_connection": 0,
+                        "port_not_protected": 0, "icmp": 0}},
   "started_at_ms": 1791951164584, "version": "0.1.0",
   "protected_ports": 4, "risky_ports": false, "block_icmp": false,
   "autostart": false, "rdp_enabled": false

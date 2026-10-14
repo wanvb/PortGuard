@@ -150,6 +150,7 @@ impl PortGuardApi for Controller {
                     captured_packets: inner.captured_packets,
                     total_bans: inner.total_bans,
                     uptime_seconds: uptime,
+                    ignored: inner.engine.stats().ignored,
                 },
                 started_at_ms: self.rt.started_at_ms(),
                 version: env!("CARGO_PKG_VERSION").to_string(),

@@ -11,7 +11,7 @@
 
 use crate::config::{Config, ProtectionRule};
 use crate::iprange::IpSet;
-use crate::model::{Ip, PacketInfo, PortGroup, Protocol, TcpFlags};
+use crate::model::{IgnoreCounters, Ip, PacketInfo, PortGroup, Protocol, TcpFlags};
 use crate::tracker::{ConnectionTracker, TrackKey};
 
 /// 原始 TCP 标志位常量集合，便于构造测试数据。
@@ -102,6 +102,11 @@ pub struct EngineStats {
     pub tracked_events: u64,
     /// 超阈值次数。
     pub threshold_hits: u64,
+    /// 被忽略的数据包按原因计数。
+    ///
+    /// 这是排查「保护端口收不到任何连接」的第一手证据：抓包数在涨、
+    /// 但某个忽略计数同步在涨，说明问题出在判定条件而非抓包链路。
+    pub ignored: IgnoreCounters,
 }
 
 /// 「当前连接」视图行，供 Web 面板展示。
@@ -211,6 +216,7 @@ impl RuleEngine {
         self.stats.packets = self.stats.packets.saturating_add(1);
 
         if pkt.protocol == Protocol::Icmp {
+            self.count_ignored(|c| c.icmp += 1);
             return Outcome::Ignored {
                 reason: "icmp_unsupported",
             };
@@ -220,11 +226,13 @@ impl RuleEngine {
         let outbound = pkt.src == self.local_ip;
         if !inbound && !outbound {
             // SIO_RCVALL 会收到网段内所有流量，非本机流量直接忽略。
+            self.count_ignored(|c| c.not_local += 1);
             return Outcome::Ignored {
                 reason: "not_local_traffic",
             };
         }
         if outbound && !self.count_outbound {
+            self.count_ignored(|c| c.outbound += 1);
             return Outcome::Ignored {
                 reason: "outbound_ignored",
             };
@@ -233,9 +241,14 @@ impl RuleEngine {
         let peer: Ip = if inbound { pkt.src } else { pkt.dst };
         let service_port = if inbound { pkt.dst_port } else { pkt.src_port };
 
-        // ① 白名单最高优先级。
+        // ① 白名单最高优先级：只统计、永不封停。
         if self.whitelist.contains(peer) {
             self.stats.whitelisted = self.stats.whitelisted.saturating_add(1);
+            // 白名单不参与阈值判定，但要留下展示记录：否则面板上的 WHITELIST 状态
+            // 永远不可达，用户会误以为「白名单里的地址从来没连过」。
+            if pkt.protocol != Protocol::Tcp || pkt.tcp_flags.is_connection_request() {
+                self.record_display_only(peer, service_port, pkt.timestamp_ms, pkt.protocol);
+            }
             return Outcome::Whitelisted;
         }
         // ② 黑名单立即封停。
@@ -248,6 +261,7 @@ impl RuleEngine {
         match pkt.protocol {
             Protocol::Tcp => {
                 if !pkt.tcp_flags.is_connection_request() {
+                    self.count_ignored(|c| c.not_new_connection += 1);
                     return Outcome::Ignored {
                         reason: "not_new_connection",
                     };
@@ -295,11 +309,15 @@ impl RuleEngine {
                         result = out;
                     }
                 }
+                if matches!(result, Outcome::Ignored { .. }) {
+                    self.count_ignored(|c| c.port_not_protected += 1);
+                }
                 result
             }
             Protocol::Udp => {
                 // UDP 无连接建立过程，每个报文都记一次访问（规范 4.3）。
                 if !self.udp_mask.contains(service_port) {
+                    self.count_ignored(|c| c.port_not_protected += 1);
                     return Outcome::Ignored {
                         reason: "port_not_protected",
                     };
@@ -317,10 +335,66 @@ impl RuleEngine {
                     self.udp_rule.max_attempts,
                 )
             }
-            Protocol::Icmp => Outcome::Ignored {
-                reason: "icmp_unsupported",
-            },
+            Protocol::Icmp => {
+                self.count_ignored(|c| c.icmp += 1);
+                Outcome::Ignored {
+                    reason: "icmp_unsupported",
+                }
+            }
         }
+    }
+
+    /// 原子地累加某个忽略计数（饱和，不 panic）。
+    fn count_ignored<F: FnOnce(&mut IgnoreCounters)>(&mut self, f: F) {
+        f(&mut self.stats.ignored);
+    }
+
+    /// 服务端口所属的保护组。
+    ///
+    /// 端口同时属于 TCP 与 WEB 时取 TCP（与 `evaluate` 的「TCP 优先作为代表」一致），
+    /// 仅供展示使用。
+    fn group_of_port(&self, port: u16, protocol: Protocol) -> Option<PortGroup> {
+        match protocol {
+            Protocol::Tcp => {
+                if self.tcp_mask.contains(port) {
+                    Some(PortGroup::Tcp)
+                } else if self.web_mask.contains(port) {
+                    Some(PortGroup::Web)
+                } else {
+                    None
+                }
+            }
+            Protocol::Udp => {
+                if self.udp_mask.contains(port) {
+                    Some(PortGroup::Udp)
+                } else {
+                    None
+                }
+            }
+            Protocol::Icmp => None,
+        }
+    }
+
+    /// 只写跟踪表、不参与阈值判定的展示记录（白名单专用）。
+    ///
+    /// 端口不在任何保护组时不记录：白名单 IP 访问非保护端口对用户没有意义，
+    /// 记下来只会让连接列表被无关行淹没。
+    fn record_display_only(&mut self, peer: Ip, service_port: u16, now_ms: u64, protocol: Protocol) {
+        let group = match self.group_of_port(service_port, protocol) {
+            Some(g) => g,
+            None => return,
+        };
+        let window = match group {
+            PortGroup::Tcp => self.tcp_rule.window_ms(),
+            PortGroup::Web => self.web_rule.window_ms(),
+            PortGroup::Udp => self.udp_rule.window_ms(),
+        };
+        let key = TrackKey {
+            ip: u32::from(peer),
+            port: service_port,
+            group,
+        };
+        let _ = self.tracker.record(key, now_ms, window);
     }
 
     /// 记录一次事件并按所属组判定。
@@ -754,6 +828,82 @@ mod tests {
         let e = engine();
         // tcp 1 个 + web 1 个 + udp 1 个
         assert_eq!(e.protected_port_count(), 3);
+    }
+
+    #[test]
+    fn 忽略原因分别计数() {
+        let mut e = engine();
+        // 非本机流量
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.src = ip("10.0.0.6");
+        pkt.dst = ip("10.0.0.7");
+        e.evaluate(&pkt);
+        // 本机外连
+        let mut out = syn_packet(PEER, 3389, 1_000);
+        out.src = ip(LOCAL);
+        out.dst = ip(PEER);
+        out.src_port = 3389;
+        out.dst_port = 55555;
+        e.evaluate(&out);
+        // 非新建连接
+        let mut ack = syn_packet(PEER, 3389, 1_000);
+        ack.tcp_flags = TcpFlags {
+            ack: true,
+            ..Default::default()
+        };
+        e.evaluate(&ack);
+        // 端口未保护
+        e.evaluate(&syn_packet(PEER, 8080, 1_000));
+        // ICMP
+        let icmp = PacketInfo {
+            src: ip(PEER),
+            dst: ip(LOCAL),
+            src_port: 0,
+            dst_port: 0,
+            protocol: Protocol::Icmp,
+            tcp_flags: TcpFlags::default(),
+            length: 28,
+            timestamp_ms: 1_000,
+        };
+        e.evaluate(&icmp);
+
+        let ig = e.stats().ignored;
+        assert_eq!(ig.not_local, 1);
+        assert_eq!(ig.outbound, 1);
+        assert_eq!(ig.not_new_connection, 1);
+        assert_eq!(ig.port_not_protected, 1);
+        assert_eq!(ig.icmp, 1);
+    }
+
+    #[test]
+    fn 白名单地址留下展示记录但绝不封停() {
+        let mut cfg = base_config();
+        cfg.lists.whitelist = vec!["203.0.113.*".to_string()];
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        for i in 0..10u64 {
+            assert_eq!(
+                e.evaluate(&syn_packet(PEER, 3389, i * 1_000)),
+                Outcome::Whitelisted
+            );
+        }
+        // 面板需要能看到白名单地址的访问，故仍进跟踪表
+        let rows = e.connection_rows(9_000, 60_000);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ip, ip(PEER));
+        assert_eq!(rows[0].total_count, 10);
+        assert_eq!(e.stats().threshold_hits, 0, "白名单不得被自动封停");
+    }
+
+    #[test]
+    fn 白名单访问非保护端口不留记录() {
+        let mut cfg = base_config();
+        cfg.lists.whitelist = vec!["203.0.113.*".to_string()];
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        assert_eq!(
+            e.evaluate(&syn_packet(PEER, 8080, 1_000)),
+            Outcome::Whitelisted
+        );
+        assert_eq!(e.tracker.len(), 0, "非保护端口不应产生展示记录");
     }
 
     #[test]

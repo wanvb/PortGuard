@@ -89,12 +89,26 @@
             <div class="stat ok">
               <div class="stat-label">受保护端口</div>
               <div class="stat-value" id="stat-ports">0</div>
-              <div class="stat-foot">TCP / TCP-WEB / UDP 合计</div>
+              <div class="stat-foot" id="stat-ports-foot">TCP / TCP-WEB / UDP 合计</div>
             </div>
             <div class="stat warn">
               <div class="stat-label">累计抓包</div>
               <div class="stat-value" id="stat-packets">0</div>
               <div class="stat-foot" id="stat-packets-foot">累计封停 0 次</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">
+                判定明细<small>抓到的包为何未计入端口统计</small>
+              </div>
+              <div class="muted" style="font-size: 12px">
+                保护端口长期无记录时，看这几项即可定位是抓包问题还是判定问题
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="stats" id="ignore-stats"></div>
             </div>
           </div>
 

@@ -250,6 +250,37 @@ impl BanRecord {
     }
 }
 
+/// 被忽略数据包按原因分类的计数。
+///
+/// 只统计「抓到了、但没参与端口判定」的包，用于区分两类问题：
+/// 抓包层收不到包，还是判定层把包丢掉了（规范 26.1：不得静默失效）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IgnoreCounters {
+    /// 目的地址不是本机（混杂模式下网段内其它主机的流量）。
+    pub not_local: u64,
+    /// 本机主动外连（默认不计入阈值）。
+    pub outbound: u64,
+    /// 非新建连接（`SYN+ACK`、纯 `ACK`、`FIN` 等）。
+    pub not_new_connection: u64,
+    /// 服务端口不在任何保护组内。
+    pub port_not_protected: u64,
+    /// ICMP（只由系统级 Ping 屏蔽处理，不参与端口统计）。
+    pub icmp: u64,
+}
+
+impl IgnoreCounters {
+    /// 按面板展示顺序返回「中文标签 + 计数」。
+    pub fn labeled(&self) -> [(&'static str, u64); 5] {
+        [
+            ("非本机流量", self.not_local),
+            ("本机外连", self.outbound),
+            ("非新建连接", self.not_new_connection),
+            ("端口未保护", self.port_not_protected),
+            ("ICMP", self.icmp),
+        ]
+    }
+}
+
 /// 运行统计快照，直接喂给 Web 面板的统计卡片。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Statistics {
@@ -265,4 +296,6 @@ pub struct Statistics {
     pub total_bans: u64,
     /// 自进程启动以来的运行秒数。
     pub uptime_seconds: u64,
+    /// 被忽略数据包的分类计数（排查「程序在跑、端口却没反应」）。
+    pub ignored: IgnoreCounters,
 }

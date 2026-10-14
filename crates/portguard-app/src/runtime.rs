@@ -42,6 +42,10 @@ const TRACK_RETENTION_MS: u64 = 10 * 60 * 1000;
 /// RDP 巡检的最小间隔（避免高频枚举会话）。
 const RDP_PASS: Duration = Duration::from_secs(15);
 
+/// 保护端口全空时的启动告警文案。
+const EMPTY_PROTECT_WARNING: &str =
+    "保护端口为空：不会统计任何连接、也不会自动封停，请在设置页填写保护端口";
+
 /// 一次封停请求。
 #[derive(Clone, Debug)]
 pub struct BanRequest {
@@ -270,6 +274,8 @@ impl RuntimeHandle {
             }
         };
 
+        let protect_empty = !config.has_any_protected_port();
+
         let inner = Arc::new(Mutex::new(Inner {
             engine: RuleEngine::new(&config, local_ip.unwrap_or(Ip::UNSPECIFIED)),
             config,
@@ -282,6 +288,14 @@ impl RuntimeHandle {
             total_bans: 0,
             pending: HashSet::new(),
         }));
+
+        // 保护端口全空时程序「看着在跑」却不会统计、也不会封停任何端口。
+        // 启动即告警并写入事件流，避免用户对着一片空白的连接列表无从下手。
+        if protect_empty {
+            logger.warn(EMPTY_PROTECT_WARNING.to_string());
+            let mut g = lock_inner(&inner);
+            g.push_event("warn", EMPTY_PROTECT_WARNING.to_string(), None);
+        }
 
         let (tx, rx) = mpsc::channel::<Action>();
         let handle = RuntimeHandle {
@@ -592,8 +606,9 @@ fn apply_ban(
                 g.push_event("warn", format!("封停被拒绝：{}", e), Some(ip_text));
                 return;
             }
-            // 封停后从跟踪列表移除，面板立即反映
-            g.engine.tracker.remove_ip(u32::from(req.ip));
+            // 保留跟踪行（状态显示为 BANNED / PERMANENT），不在这里删除：
+            // 删掉后用户只看得到「封停记录」，看不到这个 IP 究竟在打哪个端口、
+            // 打了几次；行本身仍按 TTL 过期，不会永久占用面板。
             g.total_bans = g.total_bans.saturating_add(1);
             let label = g
                 .bans
@@ -866,6 +881,63 @@ mod tests {
             sink.consume(syn_packet("203.0.113.9", "192.168.1.10", 3389));
         }
         assert_eq!(rt.read(|i| i.pending.len()), 0);
+    }
+
+    #[test]
+    fn 封停后跟踪行保留并标记状态() {
+        let mut cfg = Config::with_defaults();
+        // 阈值放宽，先只产生跟踪记录、不触发自动封停（避免与工作线程竞态）
+        cfg.protect.tcp.max_attempts = 99;
+        cfg.network.adapter = "192.168.1.10".to_string();
+        let (rt, fw, paths) = runtime_with(cfg);
+        let sink = PacketSink {
+            inner: Arc::clone(&rt.inner),
+            tx: rt.tx.clone(),
+            logger: Arc::clone(&rt.logger),
+        };
+        for _ in 0..3 {
+            sink.consume(syn_packet("203.0.113.9", "192.168.1.10", 3389));
+        }
+
+        let fw_dyn: Arc<dyn FirewallBackend> = fw.clone();
+        apply_action(
+            &rt.inner,
+            &fw_dyn,
+            &rt.logger,
+            &paths,
+            Action::Ban(BanRequest {
+                ip: "203.0.113.9".parse().unwrap(),
+                // 用自动封停原因：手动封停按规范一律永久，得不到 BANNED 状态
+                reason: BanReason::TcpThreshold,
+                protocol: Some(Protocol::Tcp),
+                service_port: Some(3389),
+                remote_port: Some(40000),
+                attempt_count: 3,
+                permanent_override: None,
+            }),
+        );
+
+        let rows = rt.read(|i| i.connection_rows());
+        assert_eq!(rows.len(), 1, "封停后不得删除跟踪行");
+        assert_eq!(rows[0].ip, "203.0.113.9");
+        assert_eq!(rows[0].service_port, 3389);
+        assert_eq!(rows[0].state, "BANNED");
+        assert_eq!(rows[0].total_count, 3);
+    }
+
+    #[test]
+    fn 保护端口为空时启动会写入告警事件() {
+        let mut cfg = Config::with_defaults();
+        cfg.protect.tcp.ports.clear();
+        cfg.protect.http.ports.clear();
+        cfg.protect.udp.ports.clear();
+        let (rt, _, _) = runtime_with(cfg);
+        let warned = rt.read(|i| {
+            i.events
+                .iter()
+                .any(|e| e.kind == "warn" && e.message.contains("保护端口为空"))
+        });
+        assert!(warned, "保护端口全空必须显式告警，不得静默失效");
     }
 
     #[test]

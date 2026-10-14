@@ -134,6 +134,9 @@ fn 首页与静态资源可访问() {
     assert!(head.starts_with("HTTP/1.0 200") || head.starts_with("HTTP/1.1 200"));
     assert!(head.contains("text/html"));
     assert!(body.contains("PortGuard"), "首页应包含品牌名");
+    // 判定明细区与受保护端口明细是排查「端口无记录」的入口，不能被删掉
+    assert!(body.contains("ignore-stats"), "首页应包含判定明细容器");
+    assert!(body.contains("stat-ports-foot"), "受保护端口卡应有明细脚注");
 
     let (head, body) = split_response(&h.get("/assets/app.js"));
     assert!(head.contains("200"));
@@ -163,6 +166,38 @@ fn 状态接口返回完整聚合数据() {
     assert!(v["events"].as_array().is_some());
     // 白名单与端口统计必须一起下发，否则概览页会显示错误数字
     assert_eq!(v["status"]["protected_ports"], 4);
+    // 判定明细的五个计数必须与状态一起下发（面板首屏即依赖）
+    for key in [
+        "not_local",
+        "outbound",
+        "not_new_connection",
+        "port_not_protected",
+        "icmp",
+    ] {
+        assert!(
+            v["status"]["stats"]["ignored"][key].is_number(),
+            "判定明细缺少字段 {}",
+            key
+        );
+    }
+}
+
+#[test]
+fn 保护端口全空必须被拒绝() {
+    let h = Harness::start();
+    let body = split_response(&h.get("/api/config")).1;
+    let mut cfg: serde_json::Value = serde_json::from_str(&body).unwrap();
+    cfg["protect"]["tcp"]["ports"] = serde_json::json!([]);
+    cfg["protect"]["http"]["ports"] = serde_json::json!([]);
+    cfg["protect"]["udp"]["ports"] = serde_json::json!([]);
+
+    let (head, out) = split_response(&h.post("/api/config", &cfg.to_string()));
+    assert!(head.contains("400"), "三组全空必须拒绝：{} {}", head, out);
+    assert!(out.contains("保护端口为空"), "错误提示应指明原因：{}", out);
+
+    // 原配置保持不变
+    let back: serde_json::Value = serde_json::from_str(&split_response(&h.get("/api/config")).1).unwrap();
+    assert_eq!(back["protect"]["tcp"]["ports"][0], 3389);
 }
 
 #[test]

@@ -191,8 +191,10 @@ function renderStatus() {
   $("stat-banned").textContent = fmtNumber(s.stats.banned);
   $("stat-banned-foot").textContent = `其中永久 ${fmtNumber(s.stats.permanent)}`;
   $("stat-ports").textContent = fmtNumber(s.protected_ports);
+  $("stat-ports-foot").textContent = protectedPortsText(s);
   $("stat-packets").textContent = fmtNumber(s.stats.captured_packets);
   $("stat-packets-foot").textContent = `累计封停 ${fmtNumber(s.stats.total_bans)} 次`;
+  renderIgnoreStats(s);
 
   $("foot-version").textContent = `PortGuard v${s.version}`;
   $("badge-connections").textContent = state.connections.length;
@@ -213,6 +215,44 @@ function renderStatus() {
   if (!s.admin && !state.adminWarned) {
     state.adminWarned = true;
     toast("未以管理员身份运行：抓包与防火墙操作会失败，请重新以管理员身份启动", "warn");
+  }
+}
+
+/** 受保护端口明细：把三组端口直接写进卡片脚注，避免只看到一个总数。
+ *
+ *  配置尚未取到时退回固定文案（概览页首屏）。 */
+function protectedPortsText(s) {
+  const protect = state.config && state.config.protect;
+  if (!protect) return "TCP / TCP-WEB / UDP 合计";
+  const fmt = (g) => {
+    const ports = (protect[g] && protect[g].ports) || [];
+    return ports.length ? ports.join(",") : "未设置";
+  };
+  if (!s.protected_ports) return "三组均未设置，不会统计与封停";
+  return `TCP ${fmt("tcp")} · WEB ${fmt("http")} · UDP ${fmt("udp")}`;
+}
+
+/** 判定明细：抓包数在涨但连接列表空着时，用这几项区分问题出在哪一层。 */
+function renderIgnoreStats(s) {
+  const box = $("ignore-stats");
+  if (!box || !s.stats) return;
+  const ig = s.stats.ignored || {};
+  const items = [
+    { label: "非本机流量", value: ig.not_local, hint: "混杂模式抓到的同网段其它主机流量" },
+    { label: "本机外连", value: ig.outbound, hint: "本机主动发起，默认不计入阈值" },
+    { label: "非新建连接", value: ig.not_new_connection, hint: "SYN+ACK、纯 ACK、FIN 等过程包" },
+    { label: "端口未保护", value: ig.port_not_protected, hint: "端口不在 TCP / WEB / UDP 三组内" },
+    { label: "ICMP", value: ig.icmp, hint: "只由系统级「禁止 Ping」处理" },
+  ];
+  box.textContent = "";
+  for (const it of items) {
+    box.appendChild(
+      el("div", { class: "stat" }, [
+        el("div", { class: "stat-label", text: it.label }),
+        el("div", { class: "stat-value", text: fmtNumber(it.value || 0) }),
+        el("div", { class: "stat-foot", text: it.hint }),
+      ])
+    );
   }
 }
 
@@ -339,14 +379,22 @@ function renderConnections() {
     row.appendChild(el("td", { class: "mono muted", text: fmtClock(c.first_seen_ms) }));
     row.appendChild(el("td", { class: "mono", text: fmtClock(c.last_seen_ms) }));
     row.appendChild(el("td", {}, [stateBadge(c)]));
+    // 已封停的行保留在列表中（状态 BANNED / PERMANENT），此时该给的是「解封」
+    const banned = c.state === "BANNED" || c.state === "PERMANENT";
     row.appendChild(
       el("td", {}, [
         el("div", { class: "form-actions" }, [
-          el("button", {
-            class: "btn sm danger",
-            text: "封停",
-            onclick: () => banIp(c.ip, true),
-          }),
+          banned
+            ? el("button", {
+                class: "btn sm",
+                text: "解封",
+                onclick: () => unban(c.ip),
+              })
+            : el("button", {
+                class: "btn sm danger",
+                text: "封停",
+                onclick: () => banIp(c.ip, true),
+              }),
           el("button", {
             class: "btn sm",
             text: "加白名单",
@@ -827,6 +875,14 @@ function stopTimers() {
 async function boot() {
   bindEvents();
   await refreshState();
+  // 概览页的「受保护端口」明细需要配置，先取一次；
+  // 失败不回退整个页面，只让明细行保持默认文案。
+  try {
+    state.config = await apiGet("/api/config");
+    renderStatus();
+  } catch (_) {
+    /* 配置读取失败不影响概览其余部分 */
+  }
   await refreshAdapters();
   try {
     const meta = await apiGet("/api/meta");

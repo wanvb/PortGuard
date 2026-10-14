@@ -337,7 +337,22 @@ impl Config {
                 self.panel.bind
             ));
         }
+        // 三组端口全空时程序「看着在跑」却不会统计、也不会封停任何端口，
+        // 属于静默失效（规范 26.1），这里直接拒绝保存并给出可操作的提示。
+        if !self.has_any_protected_port() {
+            errs.push(
+                "保护端口为空：TCP / TCP-WEB / UDP 至少填写一个端口，否则不会产生任何连接记录与自动封停"
+                    .to_string(),
+            );
+        }
         errs
+    }
+
+    /// 三组保护端口是否至少有一个。
+    pub fn has_any_protected_port(&self) -> bool {
+        !self.protect.tcp.ports.is_empty()
+            || !self.protect.http.ports.is_empty()
+            || !self.protect.udp.ports.is_empty()
     }
 }
 
@@ -441,6 +456,31 @@ mod tests {
         c.geo.db = "   ".to_string();
         c.normalize();
         assert_eq!(c.geo.db, DEFAULT_GEO_DB);
+    }
+
+    #[test]
+    fn 保护端口全空会被校验拒绝() {
+        let mut c = Config::with_defaults();
+        c.protect.tcp.ports.clear();
+        c.protect.http.ports.clear();
+        c.protect.udp.ports.clear();
+        assert!(!c.has_any_protected_port());
+        let errs = c.validate();
+        assert!(
+            errs.iter().any(|e| e.contains("保护端口为空")),
+            "三组全空必须拒绝保存，实际错误={:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn 只要有一组保护端口就放行() {
+        let mut c = Config::with_defaults();
+        c.protect.http.ports.clear();
+        c.protect.udp.ports.clear();
+        // 只留 TCP 3389
+        assert!(c.has_any_protected_port());
+        assert!(c.validate().is_empty());
     }
 
     #[test]

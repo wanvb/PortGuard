@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
 > 最后更新：2026-10-14
-> 测试规模：**243 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 测试规模：**251 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -9,16 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 74 | 完成 |
+| `portguard-core` | 79 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
 | `portguard-storage` | 19 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
 | `portguard-win` | 27 | 完成 |
 | `portguard-geo` | 18 | 完成 |
-| `portguard-web` | 32 | 完成 |
-| `portguard-app` | 26 | 完成 |
-| **合计** | **243** | — |
+| `portguard-web` | 33 | 完成 |
+| `portguard-app` | 28 | 完成 |
+| **合计** | **251** | — |
 
 ---
 
@@ -265,6 +265,29 @@
 
 ---
 
+## Phase 17 — 端口无记录问题的可观测性修复
+
+### Completed
+
+- **忽略原因计数**：`IgnoreCounters`（非本机流量 / 本机外连 / 非新建连接 / 端口未保护 / ICMP）
+  随 `status.stats.ignored` 下发，面板概览新增「判定明细」卡片；抓包数在涨而连接列表为空时，
+  可直接看出被丢在哪一条判定上
+- **封停后保留跟踪行**：不再在 `apply_ban` 中删除跟踪记录，面板显示 `BANNED` / `PERMANENT`，
+  便于确认封停前该 IP 打的是哪个端口、累计多少次
+- **白名单展示记录**：白名单 IP 访问受保护端口时写入跟踪表（仅展示 `WHITELIST` 状态，
+  永不累加阈值、永不封停），修复「面板有 WHITELIST 状态却永远不可达」的自相矛盾
+- **保护端口全空拒绝保存**：`Config::validate` 新增校验，三组全空时保存返回 400；
+  历史遗留的空配置在启动时写入 `warn` 事件与日志，不再静默失效
+- **面板可见性**：「受保护端口」卡片副标直接列出三组端口（`TCP 3389 · WEB 80,443 · UDP 3389`）
+
+### Tests
+
+- 新增 8 项：忽略计数分类、白名单展示记录（含非保护端口不留记录）、跟踪行封停后保留、
+  保护端口全空告警、配置校验拒绝全空、e2e 判定明细下发与全空拒绝
+- 合计 **251 项全部通过**
+
+---
+
 ## 当前已知限制
 
 | 项 | 说明 |
@@ -273,4 +296,5 @@
 | 旧版迁移 | 已永久放弃（非「缺失」），见 Phase 13 与 `docs/legacy-mapping.md` |
 | IP 地理位置 | 已实现（`portguard-geo`）；需 `ip2region_v4.xdb` 随程序分发，库缺失时仅显示「未知」，不影响判定 |
 | Win7 实测 | 未在目标系统上运行过 |
+| 网卡与 NAT | 只统计「目的地址等于所选网卡地址」的入站包。云主机做 DNAT 时入站包的目的地址已是内网地址（用 `netstat` 的 Local Address 列可确认），必须选中该内网网卡；若把公网地址填成监听地址，所有入站包都会被判为「非本机流量」 |
 | RDP 保护 | 依赖 Windows 会话枚举，未能覆盖所有远程桌面变体（如 RDP 网关中转） |

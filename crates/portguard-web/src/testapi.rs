@@ -12,7 +12,7 @@ use portguard_core::api::{
 use portguard_core::config::Config;
 use portguard_core::error::{AppError, Result};
 use portguard_core::logging::{Level, LogLine};
-use portguard_core::model::{Ip, Statistics};
+use portguard_core::model::{IgnoreCounters, Ip, Statistics};
 use std::sync::Mutex;
 
 /// 内存状态。
@@ -177,6 +177,14 @@ impl PortGuardApi for MockApi {
                     captured_packets: s.captured,
                     total_bans: banned,
                     uptime_seconds: 42,
+                    // 桩接口给一组非零计数，保证面板的判定明细区在端到端测试里也被渲染
+                    ignored: IgnoreCounters {
+                        not_local: 7,
+                        outbound: 3,
+                        not_new_connection: 5,
+                        port_not_protected: 11,
+                        icmp: 2,
+                    },
                 },
                 started_at_ms: 1_700_000_000_000,
                 version: "test".to_string(),

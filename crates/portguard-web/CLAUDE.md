@@ -23,6 +23,7 @@
 - **Origin 校验**：仅对变更类（POST）请求，`origin_is_local` 比较主机与端口，拒绝跨站表单提交。
 - **请求体上限**：`MAX_BODY = 1 MiB`，超限或未声明长度时用 `take` 限制实际读取量，防御超大请求撑爆内存；错误以 `{"error":"中文说明"}` 返回。
 - **前端数据必须经 textContent 写入**：`app.js` 禁止用 `innerHTML` 拼接来自接口的数据，防 XSS（`assets.rs` 测试守住该约定）；地理位置文本同样按外部数据对待。
+- **概览必须显示判定明细**：`status.stats.ignored` 的五项计数渲染到 `#ignore-stats`，是排查「端口无记录」的第一入口；「受保护端口」卡片副标 `#stat-ports-foot` 必须列出三组实际端口，不能只给总数（三组全空时显示提示文案）。
 - **地理位置列是纯展示**：`ConnectionView.location` / `BanView.location` 只渲染，不参与筛选以外的任何逻辑；筛选框对 `location` 做子串匹配便于按地区查找。
 - **资源内嵌单 exe**：前端经 `include_str!` 进二进制，改前端必须重编译；静态资源响应带 `no-cache`，避免升级后浏览器仍用旧前端。
 - **参数错误返回 400、服务端问题返回 500**：`map_error` 将 `InvalidIpRule` / `Config` 归为 400；`limit` 参数按区间夹取，未知接口 404。
@@ -31,8 +32,8 @@
 
 ## 测试
 - 位置：内联 `#[cfg(test)] mod tests`（`assets.rs` / `router.rs` / `server.rs` / `testapi.rs`），以及独立的端到端测试文件 `src/e2e.rs`（`#[cfg(test)] mod e2e`），真实监听回环端口用裸 TCP 发请求（含 Host / Origin 精确控制）。
-- 关键用例：`首页包含关键挂载点` / `脚本不使用危险的内联写入`、`主机校验只接受回环` / `限制参数被正确夹取`、`来源判定只认同机`、`白名单地址无法被封停` / `加入白名单会立即解封`、`陌生主机头被拒绝` / `跨站变更请求被拒绝` / `安全拦截会写入日志`、`封停与解封链路生效` / `非法配置被拒绝且不落盘` / `停止服务后端口释放`。
-- 测试数量：32 个 `#[test]`（assets 4、router 6、server 3、testapi 7、e2e 12）。
+- 关键用例：`首页包含关键挂载点` / `脚本不使用危险的内联写入`、`主机校验只接受回环` / `限制参数被正确夹取`、`来源判定只认同机`、`白名单地址无法被封停` / `加入白名单会立即解封`、`陌生主机头被拒绝` / `跨站变更请求被拒绝` / `安全拦截会写入日志`、`封停与解封链路生效` / `非法配置被拒绝且不落盘` / `停止服务后端口释放`、`首页与静态资源可访问`（含判定明细容器与端口明细脚注）/ `保护端口全空必须被拒绝`。
+- 测试数量：33 个 `#[test]`（assets 4、router 6、server 3、testapi 7、e2e 13）。
 
 ## 依赖关系
 - 依赖：`portguard-core`（`api::PortGuardApi`、`config::Config`、`error`、`model`、`logging`）、`portguard-storage`（`Logger`）、`tiny_http`（`=0.12.0`）、`serde` / `serde_json`。
