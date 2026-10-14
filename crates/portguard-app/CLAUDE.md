@@ -22,6 +22,7 @@
 - **封停后不删除跟踪行**：`apply_ban` 只更新 `bans`，跟踪表记录保留，`Inner::connection_rows` 依 `bans.is_banned` 把状态标为 `BANNED` / `PERMANENT`，用户仍能看到该 IP 打的是哪个端口、累计多少次；行本身按 5 分钟 TTL 与 10 分钟保留期自然回收。
 - **保护端口全空必须告警**：`RuntimeHandle::new` 检测 `config.has_any_protected_port()`，全空时写一条 `warn` 事件（面板可见）与告警日志，避免「程序在跑但零保护」这种静默失效。
 - **先观测再判定**：`PacketSink::consume` 在 `engine.evaluate` **之前**把包记入 `Inner::observer`，被判定层丢弃的包同样要留下记录，否则无法分辨「没抓到」与「被丢掉」。
+- **阈值判定用累计连接次数**：判定不做滑动窗口，`count >= max_attempts` 即封停；计数唯一的归零路径是 `TRACK_RETENTION_MS`（10 分钟）空闲后 `expire_pass` 的 `engine.prune` 回收该条目。调小该值会让计数更快归零（更容易漏封），调大则让「隔很久来一次」的地址也可能被累计到阈值，改动需同步 `docs/behavior-spec.md` 2.6。
 - **连接事件来源可自动回退**：`accept_pass`（随 5 秒 PRUNE 周期跑）在「受保护 TCP 端口无入站 SYN + 有本机发出的 SYN+ACK」同时成立时自动 `engine.set_count_accept(true)`，写 `warn` 事件与日志说明原因。该判定只做一次：配置里 `count_accept` 被显式改动（`apply_config` 检测到值变化）或启动时即为 `true`，都视为用户已决定，之后永不覆盖；只有自动切换的结果在换网卡时允许重新判定。重新开始抓包与切换网卡都要 `reset_observer`。
 - **禁止直接调用 netsh**：所有防火墙操作经 `portguard-firewall` 的 `FirewallBackend` trait；`netsh` 仅由该 crate 内部执行，本 crate 不拼命令。
 - **单实例**：`SingleInstance::acquire()` 返回 `Ok(None)` 时打开已有实例的面板后退出，不启动第二个监听器。

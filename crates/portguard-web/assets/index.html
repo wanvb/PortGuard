@@ -79,7 +79,7 @@
             <div class="stat">
               <div class="stat-label">跟踪中的来源 IP</div>
               <div class="stat-value" id="stat-tracking">0</div>
-              <div class="stat-foot">窗口内正在计数的地址</div>
+              <div class="stat-foot">正在累计连接次数的地址</div>
             </div>
             <div class="stat danger">
               <div class="stat-label">已封停</div>
@@ -103,7 +103,7 @@
               <div class="card-title">
                 判定明细<small>抓到的包为何未计入端口统计</small>
               </div>
-              <div class="muted" style="font-size: 12px">
+              <div class="muted" style="font-size: 13px">
                 保护端口长期无记录时，看这几项即可定位是抓包问题还是判定问题
               </div>
             </div>
@@ -118,7 +118,7 @@
               <div class="card-title">
                 抓包观测<small>混杂模式实际收到的包，按次数排序</small>
               </div>
-              <div class="muted" style="font-size: 12px">
+              <div class="muted" style="font-size: 13px">
                 这里没有出现目标端口，说明该端口的包根本没被网卡收到
               </div>
             </div>
@@ -148,7 +148,7 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">系统防护开关</div>
-              <div class="muted" style="font-size: 12px">切换后立即生效并写入配置</div>
+              <div class="muted" style="font-size: 13px">切换后立即生效并写入配置</div>
             </div>
             <div class="card-body">
               <div class="switches" id="quick-switches"></div>
@@ -161,7 +161,7 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                当前连接<small>按来源 IP / 受保护端口统计，达到阈值即封停</small>
+                当前连接<small>按来源 IP / 受保护端口累计次数，达到阈值即封停</small>
               </div>
               <div class="form-actions">
                 <input
@@ -180,8 +180,7 @@
                     <th>地理位置</th>
                     <th>分组</th>
                     <th>服务端口</th>
-                    <th>窗口次数 / 阈值</th>
-                    <th>累计</th>
+                    <th>连接次数 / 阈值</th>
                     <th>首次出现</th>
                     <th>最近出现</th>
                     <th>状态</th>
@@ -262,7 +261,9 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">受保护端口与阈值<small>端口用英文逗号分隔</small></div>
+              <div class="card-title">
+                受保护端口与阈值<small>端口用英文逗号分隔；次数为累计值，非某段时间内的次数</small>
+              </div>
             </div>
             <div class="card-body" id="protect-rows"></div>
           </div>

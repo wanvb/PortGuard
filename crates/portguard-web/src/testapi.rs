@@ -69,7 +69,6 @@ impl MockApi {
                     group: "TCP".to_string(),
                     service_port: 3389,
                     count: 3,
-                    total_count: 12,
                     first_seen_ms: 1_700_000_000_000,
                     last_seen_ms: 1_700_000_005_000,
                     threshold: 5,

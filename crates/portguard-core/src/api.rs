@@ -76,10 +76,8 @@ pub struct ConnectionView {
     /// 保护分组：`TCP` / `TCP-WEB` / `UDP`。
     pub group: String,
     pub service_port: u16,
-    /// 窗口内次数。
+    /// 累计连接次数（达到 `threshold` 即封停）。
     pub count: u32,
-    /// 生命周期累计次数。
-    pub total_count: u64,
     /// 首次出现时间（Unix 纪元毫秒）。
     pub first_seen_ms: u64,
     /// 最近出现时间（Unix 纪元毫秒）。

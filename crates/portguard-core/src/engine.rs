@@ -63,13 +63,13 @@ pub enum Outcome {
     Whitelisted,
     /// 命中黑名单：立即封停。
     BlacklistBan,
-    /// 未超阈值，已计入统计。
+    /// 未达阈值，已计入统计。
     Tracking {
         group: PortGroup,
         count: u32,
         threshold: u32,
     },
-    /// 超过阈值：应封停。
+    /// 累计次数达到阈值：应封停。
     ThresholdBan {
         group: PortGroup,
         count: u32,
@@ -115,10 +115,8 @@ pub struct ConnectionRow {
     pub ip: Ip,
     pub port: u16,
     pub group: PortGroup,
-    /// 当前窗口内次数。
-    pub window_count: u32,
-    /// 生命周期累计次数。
-    pub total_count: u64,
+    /// 累计连接次数（判定阈值用的就是这个值）。
+    pub count: u32,
     pub first_seen_ms: u64,
     pub last_seen_ms: u64,
 }
@@ -319,7 +317,6 @@ impl RuleEngine {
                         key,
                         pkt.timestamp_ms,
                         PortGroup::Tcp,
-                        self.tcp_rule.window_ms(),
                         self.tcp_rule.max_attempts,
                     );
                     if out.should_ban() {
@@ -337,7 +334,6 @@ impl RuleEngine {
                         web_key,
                         pkt.timestamp_ms,
                         PortGroup::Web,
-                        self.web_rule.window_ms(),
                         self.web_rule.max_attempts,
                     );
                     if out.should_ban() {
@@ -369,7 +365,6 @@ impl RuleEngine {
                     key,
                     pkt.timestamp_ms,
                     PortGroup::Udp,
-                    self.udp_rule.window_ms(),
                     self.udp_rule.max_attempts,
                 )
             }
@@ -422,35 +417,31 @@ impl RuleEngine {
             Some(g) => g,
             None => return,
         };
-        let window = match group {
-            PortGroup::Tcp => self.tcp_rule.window_ms(),
-            PortGroup::Web => self.web_rule.window_ms(),
-            PortGroup::Udp => self.udp_rule.window_ms(),
-        };
         let key = TrackKey {
             ip: u32::from(peer),
             port: service_port,
             group,
         };
-        let _ = self.tracker.record(key, now_ms, window);
+        let _ = self.tracker.record(key, now_ms);
     }
 
     /// 记录一次事件并按所属组判定。
     ///
     /// TCP / TCP-WEB / UDP 三组的判定逻辑完全一致，只差「用哪组阈值」与
     /// 「归入哪个组」，故合并为单一实现：三份平行代码各自演化容易埋下行为偏差。
-    /// 窗口与阈值由调用方传入，避免在持有 `&mut self.tracker` 时再借 `self.*_rule`。
+    /// 阈值由调用方传入，避免在持有 `&mut self.tracker` 时再借 `self.*_rule`。
+    ///
+    /// 判定用**累计次数**而非滑动窗口：阈值 N 表示第 N 次连接即封停（`count >= N`）。
     fn record_and_judge(
         &mut self,
         key: TrackKey,
         now_ms: u64,
         group: PortGroup,
-        window: u64,
         threshold: u32,
     ) -> Outcome {
-        let count = self.tracker.record(key, now_ms, window);
+        let count = self.tracker.record(key, now_ms);
         self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
-        if count > threshold {
+        if count >= threshold {
             self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
             Outcome::ThresholdBan {
                 group,
@@ -477,16 +468,15 @@ impl RuleEngine {
                 ip: crate::iprange::u32_to_ip(k.ip),
                 port: k.port,
                 group: k.group,
-                window_count: e.window_count(),
-                total_count: e.total_count,
+                count: e.count,
                 first_seen_ms: e.first_seen_ms,
                 last_seen_ms: e.last_seen_ms,
             })
             .collect();
         // 次数优先、时间其次，保证面板排序稳定。
         rows.sort_by(|a, b| {
-            b.window_count
-                .cmp(&a.window_count)
+            b.count
+                .cmp(&a.count)
                 .then_with(|| b.last_seen_ms.cmp(&a.last_seen_ms))
         });
         rows
@@ -519,17 +509,14 @@ mod tests {
         let mut c = Config::with_defaults();
         c.protect.tcp = ProtectionRule {
             ports: vec![3389],
-            window_seconds: 10,
             max_attempts: 3,
         };
         c.protect.http = ProtectionRule {
             ports: vec![80],
-            window_seconds: 10,
             max_attempts: 5,
         };
         c.protect.udp = ProtectionRule {
             ports: vec![53],
-            window_seconds: 10,
             max_attempts: 2,
         };
         c
@@ -584,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn 阈值内只跟踪() {
+    fn 未达阈值只跟踪() {
         let mut e = engine();
         assert!(matches!(
             e.evaluate(&syn_packet(PEER, 3389, 1_000)),
@@ -594,37 +581,45 @@ mod tests {
             e.evaluate(&syn_packet(PEER, 3389, 2_000)),
             Outcome::Tracking { count: 2, threshold: 3, .. }
         ));
-        assert!(matches!(
-            e.evaluate(&syn_packet(PEER, 3389, 3_000)),
-            Outcome::Tracking { count: 3, threshold: 3, .. }
-        ));
     }
 
     #[test]
-    fn 超阈值触发封停() {
+    fn 累计达到阈值即封停() {
         let mut e = engine();
-        for i in 0..3u64 {
+        for i in 0..2u64 {
             e.evaluate(&syn_packet(PEER, 3389, i * 1_000));
         }
-        let out = e.evaluate(&syn_packet(PEER, 3389, 3_000));
-        match out {
-            Outcome::ThresholdBan { group, count, threshold } => {
+        // 阈值 3：第 3 次连接（含本次）即封停
+        match e.evaluate(&syn_packet(PEER, 3389, 2_000)) {
+            Outcome::ThresholdBan {
+                group,
+                count,
+                threshold,
+            } => {
                 assert_eq!(group, PortGroup::Tcp);
-                assert_eq!(count, 4);
+                assert_eq!(count, 3);
                 assert_eq!(threshold, 3);
             }
-            other => panic!("期望超阈值封停，实际={:?}", other),
+            other => panic!("期望达到阈值封停，实际={:?}", other),
         }
     }
 
     #[test]
-    fn 窗口过期后计数归零() {
+    fn 累计计数不因时间间隔归零() {
+        // 滑动窗口在这里会归零 → 反复但稀疏的连接永远够不到阈值（漏封）。
         let mut e = engine();
         e.evaluate(&syn_packet(PEER, 3389, 1_000));
         e.evaluate(&syn_packet(PEER, 3389, 2_000));
-        // 推进 30 秒，10 秒窗口已全部滑出
-        let out = e.evaluate(&syn_packet(PEER, 3389, 32_000));
-        assert!(matches!(out, Outcome::Tracking { count: 1, .. }));
+        // 隔 5 分钟再连一次，累计值继续增长并触发封停
+        let out = e.evaluate(&syn_packet(PEER, 3389, 300_000));
+        assert!(matches!(
+            out,
+            Outcome::ThresholdBan {
+                count: 3,
+                threshold: 3,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -706,18 +701,16 @@ mod tests {
         cfg.protect.http.max_attempts = 2;
         cfg.protect.tcp = ProtectionRule {
             ports: vec![],
-            window_seconds: 10,
             max_attempts: 99,
         };
         let mut e = RuleEngine::new(&cfg, ip(LOCAL));
         e.evaluate(&syn_packet(PEER, 80, 1_000));
-        e.evaluate(&syn_packet(PEER, 80, 1_100));
-        let out = e.evaluate(&syn_packet(PEER, 80, 1_200));
+        let out = e.evaluate(&syn_packet(PEER, 80, 1_100));
         assert!(matches!(
             out,
             Outcome::ThresholdBan {
                 group: PortGroup::Web,
-                count: 3,
+                count: 2,
                 threshold: 2
             }
         ));
@@ -728,19 +721,16 @@ mod tests {
         let mut cfg = base_config();
         cfg.protect.tcp = ProtectionRule {
             ports: vec![8080],
-            window_seconds: 10,
             max_attempts: 99,
         };
         cfg.protect.http = ProtectionRule {
             ports: vec![8080],
-            window_seconds: 10,
             max_attempts: 2,
         };
         let mut e = RuleEngine::new(&cfg, ip(LOCAL));
         e.evaluate(&syn_packet(PEER, 8080, 1_000));
-        e.evaluate(&syn_packet(PEER, 8080, 1_100));
-        let out = e.evaluate(&syn_packet(PEER, 8080, 1_200));
-        // TCP 阈值 99 未到，WEB 阈值 2 已超
+        let out = e.evaluate(&syn_packet(PEER, 8080, 1_100));
+        // TCP 阈值 99 未到，WEB 阈值 2 已达
         assert!(matches!(
             out,
             Outcome::ThresholdBan {
@@ -785,7 +775,7 @@ mod tests {
         let mut cfg = base_config();
         cfg.protect.count_accept = true;
         let mut e = RuleEngine::new(&cfg, ip(LOCAL));
-        for i in 0..3u64 {
+        for i in 0..2u64 {
             assert!(matches!(
                 e.evaluate(&syn_ack_packet(PEER, 3389, i * 100)),
                 Outcome::Tracking {
@@ -794,12 +784,12 @@ mod tests {
                 }
             ));
         }
-        // 阈值 3：第 4 次超限
+        // 阈值 3：第 3 次即封停
         assert!(matches!(
-            e.evaluate(&syn_ack_packet(PEER, 3389, 400)),
+            e.evaluate(&syn_ack_packet(PEER, 3389, 200)),
             Outcome::ThresholdBan {
                 group: PortGroup::Tcp,
-                count: 4,
+                count: 3,
                 threshold: 3
             }
         ));
@@ -868,16 +858,12 @@ mod tests {
             timestamp_ms: 1_100,
             ..pkt
         };
-        e.evaluate(&pkt2);
-        let pkt3 = PacketInfo {
-            timestamp_ms: 1_200,
-            ..pkt
-        };
+        // 阈值 2：第 2 个报文即封停
         assert!(matches!(
-            e.evaluate(&pkt3),
+            e.evaluate(&pkt2),
             Outcome::ThresholdBan {
                 group: PortGroup::Udp,
-                count: 3,
+                count: 2,
                 threshold: 2
             }
         ));
@@ -923,16 +909,16 @@ mod tests {
     #[test]
     fn 并发多源互不干扰() {
         let mut e = engine();
-        for i in 0..3u64 {
+        for i in 0..2u64 {
             e.evaluate(&syn_packet("198.51.100.1", 3389, i * 100));
             e.evaluate(&syn_packet("198.51.100.2", 3389, i * 100));
         }
-        // 两个源各 3 次，都刚好等于阈值 3，尚未超限
+        // 两个源各 2 次，都还没到阈值 3
         assert_eq!(e.stats().threshold_hits, 0);
         assert_eq!(e.tracker.len(), 2);
         let rows = e.connection_rows(1_000, 60_000);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].window_count, 3);
+        assert_eq!(rows[0].count, 2);
     }
 
     #[test]
@@ -943,7 +929,7 @@ mod tests {
         e.evaluate(&syn_packet("198.51.100.2", 3389, 1_100));
         let rows = e.connection_rows(1_200, 60_000);
         assert_eq!(rows[0].ip, ip("198.51.100.2"));
-        assert_eq!(rows[0].window_count, 2);
+        assert_eq!(rows[0].count, 2);
     }
 
     #[test]
@@ -1021,7 +1007,7 @@ mod tests {
         let rows = e.connection_rows(9_000, 60_000);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].ip, ip(PEER));
-        assert_eq!(rows[0].total_count, 10);
+        assert_eq!(rows[0].count, 10);
         assert_eq!(e.stats().threshold_hits, 0, "白名单不得被自动封停");
     }
 

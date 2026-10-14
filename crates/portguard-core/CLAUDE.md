@@ -1,7 +1,7 @@
 # portguard-core 模块规范
 
 ## 职责
-- 纯业务逻辑层：领域模型、配置模型与 TOML 读写、IP 规则解析、滑动窗口连接跟踪、封停状态机、规则引擎、日志内存缓冲、表现层契约。
+- 纯业务逻辑层：领域模型、配置模型与 TOML 读写、IP 规则解析、累计连接计数、封停状态机、规则引擎、日志内存缓冲、表现层契约。
 - 不调用任何 Win32 / WinSock API，不做网络 I/O，无平台相关代码（规范 3.1）。
 - 不决定「如何封停」：只产出判定结果（`Outcome`）与封停记录（`BanRecord`），实际防火墙操作由 `portguard-firewall` 承担。
 - 不负责日志落盘：只提供 `LogLine` 与内存缓冲，写磁盘由 `portguard-storage` 的独立线程完成（规范 42）。
@@ -14,7 +14,7 @@
 | `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（默认 `false`，规范 4.1） |
 | `observe` | `Observer`、`Observation`、`MAX_ENTRIES`、`direction_label` | 纯诊断的抓包观测表：按「方向 + 协议 + 本机端口 + 标志类别」计数，`observe` / `top` / `count_matching` / `clear` / `overflow` |
 | `iprange` | `IpRange`、`IpSet`、`parse_ipv4`、`u32_to_ip` | 支持单 IP / 区间 / 末段通配 / CIDR / 多段通配；`IpSet::from_rules` 任一条非法即整体失败 |
-| `tracker` | `TrackKey`、`TrackEntry`、`ConnectionTracker` | `record` 返回当前窗口计数；`peek_count`、`prune`、`remove_ip`、`iter_entries` |
+| `tracker` | `TrackKey`、`TrackEntry`、`ConnectionTracker` | `record` 返回**累计**事件次数；`prune`（条目回收即计数归零）、`remove_ip`、`iter_entries` |
 | `ban` | `RULE_PREFIX`、`ban_rule_name`、`is_own_rule`、`BanManager` | `make_record`、`ban`、`unban`、`take_expired`、`restore`、`snapshot` |
 | `engine` | `RuleEngine`、`Outcome`、`EngineStats`、`ConnectionRow`、`FLAG_SYN` | `new`、`reload`、`set_local_ip`、`evaluate`、`connection_rows`、`prune`、`protected_port_count`、`set_count_accept` / `count_accept`；`EngineStats.ignored` 与 `Outcome::Ignored` 的 `reason` 一一对应 |
 | `logging` | `Level`、`LogLine`、`LogBuffer` | `push`、`tail`、`render` |
@@ -26,7 +26,9 @@
 ## 关键约束
 - 禁止任何 Win32 / WinSock 调用（规范 3.1）；本 crate 依赖仅 `serde` / `toml` / `thiserror`，不含 `windows`。
 - 生产代码禁止 `unwrap()` / `expect()`，统一 `Result<T, AppError>` 向上传播；`lib.rs` 以 `#![deny(clippy::unwrap_used, clippy::expect_used)]` 强制，测试经 `cfg_attr(test, allow(...))` 豁免（规范 27）。
-- 判定顺序唯一权威实现在 `engine.rs`：白名单 → 黑名单 → 保护端口 → 次数阈值 → 封停（规范 5.1）。
+- 判定顺序唯一权威实现在 `engine.rs`：白名单 → 黑名单 → 保护端口 → 累计次数阈值 → 封停（规范 5.1）。
+- 阈值判定用**累计连接次数**，不做滑动窗口：`count >= max_attempts` 即封停。计数唯一的归零路径是条目空闲超保留期被 `prune` 回收（保留期由 `portguard-app` 的 `TRACK_RETENTION_MS` 决定，当前 10 分钟）。禁止重新引入按时间滑出的窗口计数：稀疏但反复的连接会因此永远够不到阈值，表现为「面板累计次数一直涨却从不封停」的漏封（规范 5.1 修订）。
+- `ProtectionRule` 只有 `ports` 与 `max_attempts` 两个字段：`window_seconds` 已废弃，不得再以任何形式加回（旧 `config.toml` 里残留的该字段由 serde 静默忽略，不需要兼容分支）。
 - 白名单优先最高，任何路径（threshold / blacklist / manual / restore）都不得封停白名单 IP（规范 26.2）；`BanManager::ban` 命中白名单必须返回 `Err`，不得假装成功。
 - 白名单命中即返回，**不参与阈值判定**；但可计数的包（TCP 为 `SYN && !ACK`、UDP 任意报文）在端口属于某保护组时会经 `record_display_only` 写入跟踪表，仅用于面板展示 `WHITELIST` 状态，不得累加阈值、不得产生封停。
 - 判定中每条丢弃路径都必须累加对应的 `IgnoreCounters`，禁止新增无计数的静默丢弃分支（否则面板无法区分抓包问题与判定问题）。
@@ -43,15 +45,15 @@
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。
-- 分布：`ban.rs` 11、`config.rs` 12、`engine.rs` 29、`iprange.rs` 11、`logging.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 10。
+- 分布：`ban.rs` 11、`config.rs` 13、`engine.rs` 29、`iprange.rs` 11、`logging.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
 - 合计 `#[test]`：88 个。
 - 关键用例：
   - `ban`：白名单地址手动封停同样被拒绝、永久封停不会被临时封停降级、恢复时丢弃白名单记录并可用到期回收清理防火墙、规则名前缀可识别归属。
   - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝。
-  - `engine`：白名单优先于黑名单、超阈值触发封停、入站口径下握手响应不算新连接、`count_accept` 打开后出站 SYN+ACK 计一次、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
+  - `engine`：白名单优先于黑名单、累计达到阈值即封停、累计计数不因时间间隔归零、入站口径下握手响应不算新连接、`count_accept` 打开后出站 SYN+ACK 计一次、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
   - `observe`：入站与出站分别归类、同键累计次数、条目上限不会无限增长、可按条件统计服务端口、非本机流量归入端口零。
   - `iprange`：区间写反时自动纠正、多段通配、非尾部通配判定非法、规则集遇非法规则整体失败。
-  - `tracker`：窗口滑出后旧事件不再计数、生命周期累计计数不受窗口影响、条目上限触发淘汰不会无限增长。
+  - `tracker`：间隔很久仍继续累计、定期清理过期条目会重置计数、同地址不同端口分别计数、条目上限触发淘汰不会无限增长。
   - `time`：已知时间点换算正确、闰年二月正确处理、时区偏移可配置。
 
 ## 依赖关系

@@ -394,7 +394,7 @@ function renderConnections() {
   if (!rows.length) {
     body.appendChild(
       el("tr", {}, [
-        el("td", { colspan: "10" }, [
+        el("td", { colspan: "9" }, [
           el("div", { class: "empty" }, [
             el("strong", { text: keyword ? "没有匹配的记录" : "当前没有跟踪中的连接" }),
             el("span", {
@@ -417,7 +417,9 @@ function renderConnections() {
     row.appendChild(el("td", {}, [el("span", { class: "badge group", text: c.group })]));
     row.appendChild(el("td", { class: "mono", text: String(c.service_port) }));
     row.appendChild(
-      el("td", {}, [
+      el("td", {
+        title: `累计连接 ${c.count} 次，达到阈值 ${c.threshold} 次即封停`,
+      }, [
         el("div", { class: "meter" }, [
           el("div", { class: "meter-track" }, [
             el("div", {
@@ -429,7 +431,6 @@ function renderConnections() {
         ]),
       ])
     );
-    row.appendChild(el("td", { class: "mono", text: fmtNumber(c.total_count) }));
     row.appendChild(el("td", { class: "mono muted", text: fmtClock(c.first_seen_ms) }));
     row.appendChild(el("td", { class: "mono", text: fmtClock(c.last_seen_ms) }));
     row.appendChild(el("td", {}, [stateBadge(c)]));
@@ -573,7 +574,7 @@ function renderSettings() {
   const box = $("protect-rows");
   box.textContent = "";
   for (const g of PROTECT_GROUPS) {
-    const rule = cfg.protect[g.key] || { ports: [], window_seconds: 10, max_attempts: 5 };
+    const rule = cfg.protect[g.key] || { ports: [], max_attempts: 5 };
     box.appendChild(
       el("div", { class: "port-row" }, [
         el("span", { class: "port-name", text: g.name }),
@@ -585,23 +586,16 @@ function renderSettings() {
           "data-field": "ports",
           title: g.hint,
         }),
-        el("span", { class: "muted", text: "窗口" }),
-        el("input", {
-          type: "number",
-          min: "1",
-          value: rule.window_seconds,
-          "data-group": g.key,
-          "data-field": "window_seconds",
-        }),
-        el("span", { class: "muted", text: "秒内超过" }),
+        el("span", { class: "muted", text: "累计连接" }),
         el("input", {
           type: "number",
           min: "1",
           value: rule.max_attempts,
           "data-group": g.key,
           "data-field": "max_attempts",
+          title: "累计连接次数达到该值即封停；该来源空闲 10 分钟后计数归零",
         }),
-        el("span", { class: "muted", text: "次则封停" }),
+        el("span", { class: "muted", text: "次即封停" }),
       ])
     );
   }
@@ -676,7 +670,6 @@ function collectSettings() {
     // collectPorts 返回 { ports, error }，只取 ports；整对象赋给后端会因
     // 「map 喂给 Vec<u16>」而报请求体格式错误
     base.protect[g.key].ports = collectPorts(g.key).ports;
-    base.protect[g.key].window_seconds = collectNumber(g.key, "window_seconds");
     base.protect[g.key].max_attempts = collectNumber(g.key, "max_attempts");
   }
 

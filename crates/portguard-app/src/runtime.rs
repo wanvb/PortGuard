@@ -37,6 +37,9 @@ const CONNECTION_TTL_MS: u64 = 5 * 60 * 1000;
 const MAX_EVENTS: usize = 200;
 
 /// 跟踪表清理周期与保留时长。
+///
+/// 保留期同时是**累计计数的归零线**：判定按累计连接次数进行（不做滑动窗口），
+/// 某来源连续空闲超过保留期后条目被回收，下次出现时从 0 重新计数。
 const PRUNE_PASS: Duration = Duration::from_secs(5);
 const TRACK_RETENTION_MS: u64 = 10 * 60 * 1000;
 
@@ -267,8 +270,7 @@ impl Inner {
                     ip: row.ip.to_string(),
                     group: row.group.as_str().to_string(),
                     service_port: row.port,
-                    count: row.window_count,
-                    total_count: row.total_count,
+                    count: row.count,
                     first_seen_ms: row.first_seen_ms,
                     last_seen_ms: row.last_seen_ms,
                     threshold: rule.max_attempts,
@@ -980,7 +982,7 @@ mod tests {
             tx: rt.tx.clone(),
             logger: Arc::clone(&rt.logger),
         };
-        // 连续 5 个包：第 2 个就应触发封停，之后因 pending 去重不再重复排队
+        // 连续 5 个包：阈值 1，第 1 个就触发封停，之后因 pending 去重不再重复排队
         for _ in 0..5 {
             sink.consume(syn_packet("203.0.113.9", "192.168.1.10", 3389));
         }
@@ -1046,7 +1048,7 @@ mod tests {
         assert_eq!(rows[0].ip, "203.0.113.9");
         assert_eq!(rows[0].service_port, 3389);
         assert_eq!(rows[0].state, "BANNED");
-        assert_eq!(rows[0].total_count, 3);
+        assert_eq!(rows[0].count, 3);
     }
 
     #[test]

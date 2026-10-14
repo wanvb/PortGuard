@@ -1,14 +1,19 @@
 //! 连接行为跟踪器。
 //!
-//! 职责：按「对端 IP + 本机服务端口 + 保护分组」统计滑动时间窗口内的事件次数。
+//! 职责：按「对端 IP + 本机服务端口 + 保护分组」累计连接事件次数。
 //!
 //! 设计要点：
+//! - 计数为**累计值**，不做滑动窗口：只要该来源还在活动，次数就一直累加，
+//!   达到阈值即封停（规范 5.1）。滑出窗口就归零会让「间隔几十秒反复连接」
+//!   永远够不到阈值，这正是要避免的漏封。
+//! - 归零只有一条路径：该条目连续空闲超过保留期后被 `prune` 回收，
+//!   下次再出现时重新从 0 开始。因此「打完就走的扫描」会迅速累计，
+//!   而「隔天来一次的正常访问」不会跨天叠加。
 //! - 时间由调用方注入（`now_ms`），因此完全可单元测试，不依赖真实时钟。
-//! - 每个键维护一个时间戳队列，窗口外的时间戳在记录时惰性弹出。
 //! - 提供上限保护与显式 `prune`，防止长期运行时条目无限增长（规范 33 稳定性要求）。
 
 use crate::model::PortGroup;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 /// 跟踪键：一个「对端 IP → 本机某端口」的访问关系。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -17,36 +22,28 @@ pub struct TrackKey {
     pub ip: u32,
     /// 本机服务端口。
     pub port: u16,
-    /// 保护分组（决定使用哪一套窗口与阈值）。
+    /// 保护分组（决定使用哪一套阈值）。
     pub group: PortGroup,
 }
 
 /// 单个键的统计状态。
 #[derive(Clone, Debug)]
 pub struct TrackEntry {
-    /// 窗口内事件时间戳（升序）。
-    timestamps: VecDeque<u64>,
+    /// 累计连接次数（条目的生命周期内只增不减）。
+    pub count: u32,
     /// 首次出现时间。
     pub first_seen_ms: u64,
     /// 最近一次出现时间。
     pub last_seen_ms: u64,
-    /// 生命周期内累计事件次数（不随窗口滑出而减少，用于展示与日志）。
-    pub total_count: u64,
 }
 
 impl TrackEntry {
     fn new(now_ms: u64) -> Self {
         TrackEntry {
-            timestamps: VecDeque::with_capacity(8),
+            count: 0,
             first_seen_ms: now_ms,
             last_seen_ms: now_ms,
-            total_count: 0,
         }
-    }
-
-    /// 当前窗口内计数。
-    pub fn window_count(&self) -> u32 {
-        self.timestamps.len() as u32
     }
 }
 
@@ -81,10 +78,8 @@ impl ConnectionTracker {
         }
     }
 
-    /// 记录一次事件，返回该键在当前窗口内的事件数。
-    ///
-    /// `window_ms` 由调用方按分组配置传入，因此 TCP / WEB / UDP 可以各自不同。
-    pub fn record(&mut self, key: TrackKey, now_ms: u64, window_ms: u64) -> u32 {
+    /// 记录一次事件，返回该键的累计事件次数。
+    pub fn record(&mut self, key: TrackKey, now_ms: u64) -> u32 {
         if self.entries.len() >= self.max_entries && !self.entries.contains_key(&key) {
             self.evict_least_recent();
         }
@@ -93,32 +88,14 @@ impl ConnectionTracker {
             .entry(key)
             .or_insert_with(|| TrackEntry::new(now_ms));
         entry.last_seen_ms = now_ms;
-        entry.total_count = entry.total_count.saturating_add(1);
-        entry.timestamps.push_back(now_ms);
-        // 惰性淘汰窗口外的时间戳。
-        let cutoff = now_ms.saturating_sub(window_ms);
-        while let Some(&front) = entry.timestamps.front() {
-            if front < cutoff {
-                entry.timestamps.pop_front();
-            } else {
-                break;
-            }
-        }
-        entry.window_count()
-    }
-
-    /// 只读查询某键在给定窗口内的当前计数，不产生记录。
-    pub fn peek_count(&self, key: &TrackKey, now_ms: u64, window_ms: u64) -> u32 {
-        let cutoff = now_ms.saturating_sub(window_ms);
-        self.entries
-            .get(key)
-            .map(|e| e.timestamps.iter().filter(|t| **t >= cutoff).count() as u32)
-            .unwrap_or(0)
+        entry.count = entry.count.saturating_add(1);
+        entry.count
     }
 
     /// 全量清理：移除最后活跃时间早于 `retention_ms` 的条目。
     ///
     /// 返回被清理的条目数。应由后台定时任务周期性调用。
+    /// 被清理的条目连同其累计次数一起消失，该来源下次出现时从 0 重新计数。
     pub fn prune(&mut self, now_ms: u64, retention_ms: u64) -> usize {
         let cutoff = now_ms.saturating_sub(retention_ms);
         let before = self.entries.len();
@@ -178,34 +155,34 @@ mod tests {
     }
 
     #[test]
-    fn 窗口内计数递增() {
+    fn 累计计数逐次递增() {
         let mut t = ConnectionTracker::new();
         let k = key("1.2.3.4", 3389, PortGroup::Tcp);
-        assert_eq!(t.record(k, 1_000, 10_000), 1);
-        assert_eq!(t.record(k, 2_000, 10_000), 2);
-        assert_eq!(t.record(k, 3_000, 10_000), 3);
+        assert_eq!(t.record(k, 1_000), 1);
+        assert_eq!(t.record(k, 2_000), 2);
+        assert_eq!(t.record(k, 3_000), 3);
     }
 
     #[test]
-    fn 窗口滑出后旧事件不再计数() {
+    fn 间隔很久也继续累计() {
+        // 滑动窗口判定会在这里归零，导致反复但稀疏的连接永远封不掉。
         let mut t = ConnectionTracker::new();
         let k = key("1.2.3.4", 3389, PortGroup::Tcp);
-        t.record(k, 1_000, 10_000);
-        t.record(k, 2_000, 10_000);
-        // 时间推进到 20_000，cutoff = 10_000，前两条（1000/2000）滑出
-        assert_eq!(t.record(k, 20_000, 10_000), 1);
+        assert_eq!(t.record(k, 1_000), 1);
+        assert_eq!(t.record(k, 600_000), 2);
+        assert_eq!(t.record(k, 1_200_000), 3);
     }
 
     #[test]
-    fn 生命周期累计计数不受窗口影响() {
+    fn 首次与最近时间分别记录() {
         let mut t = ConnectionTracker::new();
         let k = key("1.2.3.4", 3389, PortGroup::Tcp);
-        for i in 0..10u64 {
-            t.record(k, i * 5_000, 1_000);
-        }
+        t.record(k, 1_000);
+        t.record(k, 9_000);
         let e = t.iter_entries().next().unwrap().1;
-        assert_eq!(e.total_count, 10);
-        assert_eq!(e.window_count(), 1);
+        assert_eq!(e.first_seen_ms, 1_000);
+        assert_eq!(e.last_seen_ms, 9_000);
+        assert_eq!(e.count, 2);
     }
 
     #[test]
@@ -213,9 +190,9 @@ mod tests {
         let mut t = ConnectionTracker::new();
         let a = key("1.2.3.4", 3389, PortGroup::Tcp);
         let b = key("1.2.3.4", 80, PortGroup::Web);
-        t.record(a, 1_000, 10_000);
-        t.record(a, 1_100, 10_000);
-        assert_eq!(t.record(b, 1_200, 10_000), 1);
+        t.record(a, 1_000);
+        t.record(a, 1_100);
+        assert_eq!(t.record(b, 1_200), 1);
         assert_eq!(t.len(), 2);
     }
 
@@ -224,42 +201,36 @@ mod tests {
         let mut t = ConnectionTracker::new();
         let a = key("1.2.3.4", 8080, PortGroup::Tcp);
         let b = key("1.2.3.4", 8080, PortGroup::Web);
-        t.record(a, 1_000, 10_000);
-        t.record(b, 1_000, 10_000);
-        t.record(b, 1_010, 10_000);
-        assert_eq!(t.peek_count(&a, 1_020, 10_000), 1);
-        assert_eq!(t.peek_count(&b, 1_020, 10_000), 2);
+        t.record(a, 1_000);
+        t.record(b, 1_000);
+        t.record(b, 1_010);
+        assert_eq!(t.len(), 2);
+        let counts: Vec<u32> = t.iter_entries().map(|(_, e)| e.count).collect();
+        assert!(counts.contains(&1));
+        assert!(counts.contains(&2));
     }
 
     #[test]
-    fn 不同时间窗口各自生效() {
+    fn 定期清理过期条目会重置计数() {
         let mut t = ConnectionTracker::new();
-        let k = key("9.9.9.9", 53, PortGroup::Udp);
-        t.record(k, 1_000, 60_000);
-        t.record(k, 2_000, 60_000);
-        // 短窗口下两条都已滑出
-        assert_eq!(t.peek_count(&k, 100_000, 1_000), 0);
-        // 长窗口下仍可见
-        assert_eq!(t.peek_count(&k, 3_000, 60_000), 2);
-    }
-
-    #[test]
-    fn 定期清理过期条目() {
-        let mut t = ConnectionTracker::new();
-        t.record(key("1.1.1.1", 1, PortGroup::Tcp), 1_000, 10_000);
-        t.record(key("2.2.2.2", 1, PortGroup::Tcp), 50_000, 10_000);
-        let removed = t.prune(51_000, 30_000);
-        assert_eq!(removed, 1);
-        assert_eq!(t.len(), 1);
+        let k = key("1.2.3.4", 3389, PortGroup::Tcp);
+        t.record(k, 1_000);
+        t.record(k, 2_000);
+        // 空闲超过保留期：条目被回收，累计次数一并归零
+        assert_eq!(t.prune(100_000, 30_000), 1);
+        assert_eq!(t.record(k, 100_100), 1);
     }
 
     #[test]
     fn 按地址清除全部端口() {
         let mut t = ConnectionTracker::new();
-        t.record(key("1.1.1.1", 1, PortGroup::Tcp), 1_000, 10_000);
-        t.record(key("1.1.1.1", 2, PortGroup::Tcp), 1_000, 10_000);
-        t.record(key("3.3.3.3", 1, PortGroup::Tcp), 1_000, 10_000);
-        assert_eq!(t.remove_ip(u32::from("1.1.1.1".parse::<std::net::Ipv4Addr>().unwrap())), 2);
+        t.record(key("1.1.1.1", 1, PortGroup::Tcp), 1_000);
+        t.record(key("1.1.1.1", 2, PortGroup::Tcp), 1_000);
+        t.record(key("3.3.3.3", 1, PortGroup::Tcp), 1_000);
+        assert_eq!(
+            t.remove_ip(u32::from("1.1.1.1".parse::<std::net::Ipv4Addr>().unwrap())),
+            2
+        );
         assert_eq!(t.len(), 1);
     }
 
@@ -275,15 +246,13 @@ mod tests {
                     group: PortGroup::Tcp,
                 },
                 i as u64 * 1_000,
-                10_000,
             );
         }
         assert!(t.len() <= 4, "实际条目数={}", t.len());
     }
 
     #[test]
-    fn 并发场景下的计数一致性() {
-        // 模拟多 IP 混跑：每个 IP 独立达到阈值，互不干扰。
+    fn 多源各自累计互不干扰() {
         let mut t = ConnectionTracker::new();
         for round in 0..5u64 {
             for i in 0..3u32 {
@@ -295,13 +264,12 @@ mod tests {
                         group: PortGroup::Tcp,
                     },
                     round * 100,
-                    10_000,
                 );
             }
         }
         assert_eq!(t.len(), 3);
         for (_, e) in t.iter_entries() {
-            assert_eq!(e.window_count(), 5);
+            assert_eq!(e.count, 5);
         }
     }
 }

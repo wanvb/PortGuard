@@ -13,9 +13,10 @@ use std::path::Path;
 pub struct ProtectionRule {
     /// 受保护的端口列表。
     pub ports: Vec<u16>,
-    /// 统计时间窗口（秒）。
-    pub window_seconds: u64,
-    /// 窗口内允许的最大次数，超出即封停。
+    /// 允许的最大连接次数，**累计**达到该次数即封停。
+    ///
+    /// 计数不做滑动窗口：只要该来源还在活动就一直累加，空闲超过跟踪保留期
+    /// （见 `portguard-app` 的 `TRACK_RETENTION_MS`）后条目被回收、计数归零。
     pub max_attempts: u32,
 }
 
@@ -23,7 +24,6 @@ impl Default for ProtectionRule {
     fn default() -> Self {
         ProtectionRule {
             ports: Vec::new(),
-            window_seconds: 10,
             max_attempts: 5,
         }
     }
@@ -35,17 +35,9 @@ impl ProtectionRule {
         self.ports.retain(|p| *p > 0);
         self.ports.sort_unstable();
         self.ports.dedup();
-        if self.window_seconds == 0 {
-            self.window_seconds = 1;
-        }
         if self.max_attempts == 0 {
             self.max_attempts = 1;
         }
-    }
-
-    /// 统计窗口的毫秒表示。
-    pub fn window_ms(&self) -> u64 {
-        self.window_seconds.saturating_mul(1000)
     }
 }
 
@@ -78,17 +70,14 @@ impl Default for ProtectConfig {
         ProtectConfig {
             tcp: ProtectionRule {
                 ports: vec![3389],
-                window_seconds: 10,
                 max_attempts: 5,
             },
             udp: ProtectionRule {
                 ports: vec![3389],
-                window_seconds: 10,
                 max_attempts: 5,
             },
             http: ProtectionRule {
                 ports: vec![80, 443],
-                window_seconds: 10,
                 max_attempts: 10,
             },
             count_accept: false,
@@ -421,21 +410,27 @@ mod tests {
     fn 部分字段配置可解析() {
         let c = Config::from_toml("[protect.tcp]\nports = [22, 3389]\n").unwrap();
         assert_eq!(c.protect.tcp.ports, vec![22, 3389]);
-        // window/max 走 ProtectionRule::default
-        assert_eq!(c.protect.tcp.window_seconds, 10);
+        // 缺失的阈值走 ProtectionRule::default
         assert_eq!(c.protect.tcp.max_attempts, 5);
+    }
+
+    #[test]
+    fn 旧配置里的窗口字段被忽略而不报错() {
+        // 窗口判定已废弃，旧版本写下的 window_seconds 必须能照常读入。
+        let c = Config::from_toml("[protect.tcp]\nports = [3389]\nwindow_seconds = 10\nmax_attempts = 3\n")
+            .unwrap();
+        assert_eq!(c.protect.tcp.ports, vec![3389]);
+        assert_eq!(c.protect.tcp.max_attempts, 3);
     }
 
     #[test]
     fn 端口规范化去重排序() {
         let mut r = ProtectionRule {
             ports: vec![443, 80, 443, 0, 3389],
-            window_seconds: 0,
             max_attempts: 0,
         };
         r.normalize();
         assert_eq!(r.ports, vec![80, 443, 3389]);
-        assert_eq!(r.window_seconds, 1);
         assert_eq!(r.max_attempts, 1);
     }
 
