@@ -18,5 +18,5 @@ pub mod parser;
 pub mod capture;
 
 pub use adapter::{enumerate, AdapterInfo};
-pub use capture::CaptureHandle;
+pub use capture::{CaptureDiagnostics, CaptureHandle};
 pub use parser::{parse_ethernet_or_ip, parse_ipv4, ParsedPacket};

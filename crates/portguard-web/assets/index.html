@@ -109,6 +109,32 @@
             </div>
             <div class="card-body">
               <div class="stats" id="ignore-stats"></div>
+              <div class="stat-foot" id="parse-note" style="margin-top: 8px"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">
+                抓包观测<small>混杂模式实际收到的包，按次数排序</small>
+              </div>
+              <div class="muted" style="font-size: 12px">
+                这里没有出现目标端口，说明该端口的包根本没被网卡收到
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>方向</th>
+                    <th>协议</th>
+                    <th>本机端口</th>
+                    <th>标志</th>
+                    <th>包数</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-observe"></tbody>
+              </table>
             </div>
           </div>
 
@@ -239,6 +265,26 @@
               <div class="card-title">受保护端口与阈值<small>端口用英文逗号分隔</small></div>
             </div>
             <div class="card-body" id="protect-rows"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">
+                连接事件来源<small>决定什么样的包算「一次连接」</small>
+              </div>
+            </div>
+            <div class="card-body">
+              <label class="switch">
+                <input type="checkbox" id="cfg-count-accept" />
+                <span class="switch-text">
+                  <b>统计服务端应答（SYN+ACK）</b>
+                  <span>
+                    部分云主机 / 网卡的混杂模式收不到入站包，只有本机发出的包可见；
+                    打开后改用本机发出的握手响应计数，可在「抓包观测」里确认是否需要
+                  </span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <div class="card">

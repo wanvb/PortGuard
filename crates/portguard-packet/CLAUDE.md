@@ -13,13 +13,15 @@
 | `AdapterInfo` | 字段 `ip` / `prefix_len` / `mask` / `description` / `friendly_name` / `is_virtual` / `is_up` / `if_index`；方法 `display`、`is_usable`、`is_link_local`、`mask_from_prefix` |
 | `looks_virtual(description: &str, if_type: u32) -> bool` | 按关键字与 `IF_TYPE_SOFTWARE_LOOPBACK`(24) 提示性分类虚拟网卡 |
 | `start<P,E>(local_ip: Ip, on_packet: P, on_error: E) -> Result<CaptureHandle>` | 启动抓包；`Err` 表示监听未启动成功，调用方须如实展示 |
-| `CaptureHandle` | `stop`、`is_running`、`local_ip`；`Drop` 时自动停止回收线程 |
+| `CaptureHandle` | `stop`、`is_running`、`local_ip`、`diagnostics`；`Drop` 时自动停止回收线程 |
+| `CaptureDiagnostics` | 字段 `parse_errors` / `parse_samples`；由 `CaptureHandle::diagnostics` 取快照，面板据此区分「没抓到」与「抓到但解析器丢了」 |
+| `PARSE_SAMPLE_LIMIT` | 保留的解析失败样本条数（3），样本只含长度与前 24 字节十六进制 |
 | `parse_ethernet_or_ip(buf: &[u8]) -> Result<ParsedPacket>` | 自动识别并跳过以太网头后解析 IPv4 |
 | `parse_ipv4(buf: &[u8]) -> Result<ParsedPacket>` | 解析以 IP 头开始的报文 |
 | `ParsedPacket` | 字段 `info: PacketInfo` / `ip_header_len` / `transport_header_len` |
 | `decode_tcp_flags(byte: u8) -> TcpFlags` | 解码 TCP 标志位字节 |
 | `is_icmp_echo_request(buf: &[u8]) -> bool` | 判断 ICMPv4 Echo Request（type=8） |
-| 顶层再导出 | `enumerate`、`AdapterInfo`、`CaptureHandle`、`parse_ethernet_or_ip`、`parse_ipv4`、`ParsedPacket` |
+| 顶层再导出 | `enumerate`、`AdapterInfo`、`CaptureHandle`、`CaptureDiagnostics`、`parse_ethernet_or_ip`、`parse_ipv4`、`ParsedPacket` |
 
 ## 关键约束
 - 不得在本模块直接决定封停对象（规范 3.2）。
@@ -30,7 +32,8 @@
 - 早期失败路径（socket / bind / setsockopt / WSAIoctl / 建线程）必须先 `closesocket` + `WSACleanup` 再返回，避免 Winsock 引用计数泄漏；线程退出前亦须 `closesocket` + `WSACleanup`。
 - 虚拟网卡不默认排除，是否展示由配置项 `network.include_virtual` 决定（规范 12）；但必须排除 `0.0.0.0` 与回环地址（`is_usable`）。
 - 只依赖 `portguard-core`；`windows` crate 仅在 `cfg(windows)` 下引入，非 Windows 平台 `enumerate` 返回空表、`start` 返回 `Err`，保证 `cargo test` 可跨平台编译。
-- 畸形包 / 分片包 / 非 IPv4 包在 `recv` 循环中属常态，静默忽略，不作错误上报以免日志被噪声淹没。
+- 畸形包 / 分片包 / 非 IPv4 包在 `recv` 循环中属常态，**不上报错误**以免日志被噪声淹没；但必须累加 `parse_errors` 并保留最多 3 条十六进制样本，否则「某个端口的包完全没反应」时无法区分是没抓到还是被解析丢掉。
+- 诊断计数器用 `AtomicU64` / `Mutex<Vec<String>>` 共享，抓包线程只做加法与短临界区，不得因诊断阻塞收包。
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。

@@ -29,6 +29,7 @@ pub mod error;
 pub mod iprange;
 pub mod logging;
 pub mod model;
+pub mod observe;
 pub mod time;
 pub mod tracker;
 

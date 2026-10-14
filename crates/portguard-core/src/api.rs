@@ -41,6 +41,32 @@ pub struct StatusView {
     pub geo_ready: bool,
     /// 地理位置库状态说明：加载成功时是数据库路径，否则是中文原因。
     pub geo_status: String,
+    /// 抓包层解析失败的包数（非 IPv4 / 分片 / 畸形包）。
+    ///
+    /// 与 `captured_packets` 一起看：若目标端口的包既没进连接列表、
+    /// 也没出现在观测表里，而这里在涨，说明是解析层丢的，不是没抓到。
+    pub parse_errors: u64,
+    /// 最近几次解析失败的样本说明（最多 3 条）。
+    pub parse_samples: Vec<String>,
+    /// 抓包观测：实际收到的包按「方向 + 协议 + 端口 + 标志」分类的 Top N。
+    pub observed: Vec<ObservedPortView>,
+    /// 当前是否把服务端握手响应（SYN+ACK）当作连接事件。
+    pub count_accept: bool,
+}
+
+/// 抓包观测行（纯诊断展示）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ObservedPortView {
+    /// 方向：`入站` / `出站`。
+    pub direction: String,
+    /// 协议：`TCP` / `UDP` / `ICMP`。
+    pub protocol: String,
+    /// 本机侧端口（非本机流量为 0）。
+    pub port: u16,
+    /// TCP 标志类别：`SYN` / `SYN+ACK` / `ACK` / `FIN` / `RST` / `其它`。
+    pub flags: String,
+    /// 观察到的包数。
+    pub count: u64,
 }
 
 /// 「当前连接 / 跟踪中」列表行。

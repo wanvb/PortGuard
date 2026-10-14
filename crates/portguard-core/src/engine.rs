@@ -141,6 +141,11 @@ pub struct RuleEngine {
     /// 默认 `false`：只统计「外部 → 本机受保护端口」的入站请求，
     /// 这是暴力破解与扫描的真实特征；把本机主动外连计入会误伤正常业务。
     count_outbound: bool,
+    /// 是否把「服务端握手响应（SYN+ACK）」也当成一次连接事件。
+    ///
+    /// 只有本机对受保护端口的入站连接才会发出这种包，因此不存在误伤；
+    /// 用于混杂模式收不到入站包的环境（详见 `ProtectConfig::count_accept`）。
+    count_accept: bool,
     /// 连接跟踪器。
     pub tracker: ConnectionTracker,
     stats: EngineStats,
@@ -160,6 +165,7 @@ impl RuleEngine {
             web_rule: ProtectionRule::default(),
             udp_rule: ProtectionRule::default(),
             count_outbound: false,
+            count_accept: cfg.protect.count_accept,
             tracker: ConnectionTracker::new(),
             stats: EngineStats::default(),
         };
@@ -175,6 +181,7 @@ impl RuleEngine {
         if let Ok(bl) = IpSet::from_rules(&cfg.lists.blacklist) {
             self.blacklist = bl;
         }
+        self.count_accept = cfg.protect.count_accept;
         self.tcp_rule = cfg.protect.tcp.clone();
         self.web_rule = cfg.protect.http.clone();
         self.udp_rule = cfg.protect.udp.clone();
@@ -195,6 +202,15 @@ impl RuleEngine {
 
     pub fn set_count_outbound(&mut self, v: bool) {
         self.count_outbound = v;
+    }
+
+    /// 设置是否把服务端握手响应（SYN+ACK）当作连接事件。
+    pub fn set_count_accept(&mut self, v: bool) {
+        self.count_accept = v;
+    }
+
+    pub fn count_accept(&self) -> bool {
+        self.count_accept
     }
 
     pub fn stats(&self) -> EngineStats {
@@ -231,7 +247,11 @@ impl RuleEngine {
                 reason: "not_local_traffic",
             };
         }
-        if outbound && !self.count_outbound {
+        // 服务端握手响应（SYN+ACK）虽属流出方向，但只可能是「别人连到本机受保护端口」
+        // 的应答，故在 count_accept 打开时单独放行，不算作本机主动外连。
+        let accept_signal =
+            self.count_accept && pkt.protocol == Protocol::Tcp && pkt.tcp_flags.is_handshake_accepted();
+        if outbound && !self.count_outbound && !accept_signal {
             self.count_ignored(|c| c.outbound += 1);
             return Outcome::Ignored {
                 reason: "outbound_ignored",
@@ -246,7 +266,18 @@ impl RuleEngine {
             self.stats.whitelisted = self.stats.whitelisted.saturating_add(1);
             // 白名单不参与阈值判定，但要留下展示记录：否则面板上的 WHITELIST 状态
             // 永远不可达，用户会误以为「白名单里的地址从来没连过」。
-            if pkt.protocol != Protocol::Tcp || pkt.tcp_flags.is_connection_request() {
+            let countable = match pkt.protocol {
+                Protocol::Tcp => {
+                    if inbound {
+                        pkt.tcp_flags.is_connection_request()
+                    } else {
+                        accept_signal
+                    }
+                }
+                Protocol::Udp => true,
+                Protocol::Icmp => false,
+            };
+            if countable {
                 self.record_display_only(peer, service_port, pkt.timestamp_ms, pkt.protocol);
             }
             return Outcome::Whitelisted;
@@ -260,7 +291,14 @@ impl RuleEngine {
         // ③ 保护端口 + 阈值。TCP 必须由 SYN && !ACK 触发。
         match pkt.protocol {
             Protocol::Tcp => {
-                if !pkt.tcp_flags.is_connection_request() {
+                // 连接事件来源：入站按「连接请求（SYN && !ACK）」；
+                // 出站仅在 count_accept 打开时按「握手响应（SYN+ACK）」计一次。
+                let is_event = if inbound {
+                    pkt.tcp_flags.is_connection_request()
+                } else {
+                    accept_signal
+                };
+                if !is_event {
                     self.count_ignored(|c| c.not_new_connection += 1);
                     return Outcome::Ignored {
                         reason: "not_new_connection",
@@ -710,6 +748,99 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// 构造「本机受保护端口 → 对端」的 TCP SYN+ACK（服务端握手响应）。
+    fn syn_ack_packet(peer: &str, local_port: u16, ts: u64) -> PacketInfo {
+        PacketInfo {
+            src: ip(LOCAL),
+            dst: ip(peer),
+            src_port: local_port,
+            dst_port: 50000,
+            protocol: Protocol::Tcp,
+            tcp_flags: TcpFlags {
+                syn: true,
+                ack: true,
+                ..Default::default()
+            },
+            length: 40,
+            timestamp_ms: ts,
+        }
+    }
+
+    #[test]
+    fn 默认不把握手响应计为连接事件() {
+        let mut e = engine();
+        assert_eq!(
+            e.evaluate(&syn_ack_packet(PEER, 3389, 1_000)),
+            Outcome::Ignored {
+                reason: "outbound_ignored"
+            }
+        );
+        assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 开启后握手响应计为一次连接() {
+        let mut cfg = base_config();
+        cfg.protect.count_accept = true;
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        for i in 0..3u64 {
+            assert!(matches!(
+                e.evaluate(&syn_ack_packet(PEER, 3389, i * 100)),
+                Outcome::Tracking {
+                    group: PortGroup::Tcp,
+                    ..
+                }
+            ));
+        }
+        // 阈值 3：第 4 次超限
+        assert!(matches!(
+            e.evaluate(&syn_ack_packet(PEER, 3389, 400)),
+            Outcome::ThresholdBan {
+                group: PortGroup::Tcp,
+                count: 4,
+                threshold: 3
+            }
+        ));
+        let rows = e.connection_rows(400, 60_000);
+        assert_eq!(rows.len(), 1, "服务端口应取本机端口 3389");
+        assert_eq!(rows[0].port, 3389);
+        assert_eq!(rows[0].ip, ip(PEER));
+    }
+
+    #[test]
+    fn 开启后本机主动外连仍不计入() {
+        let mut cfg = base_config();
+        cfg.protect.count_accept = true;
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        // 本机主动连接对端 3389：源端口是临时端口，发出的纯 SYN 不属于握手响应
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.src = ip(LOCAL);
+        pkt.dst = ip(PEER);
+        pkt.src_port = 55555;
+        pkt.dst_port = 3389;
+        assert_eq!(
+            e.evaluate(&pkt),
+            Outcome::Ignored {
+                reason: "outbound_ignored"
+            }
+        );
+        assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 开启后非保护端口握手响应仍被忽略() {
+        let mut cfg = base_config();
+        cfg.protect.count_accept = true;
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        assert_eq!(
+            e.evaluate(&syn_ack_packet(PEER, 8080, 1_000)),
+            Outcome::Ignored {
+                reason: "port_not_protected"
+            }
+        );
+        assert_eq!(e.stats().ignored.port_not_protected, 1);
     }
 
     #[test]

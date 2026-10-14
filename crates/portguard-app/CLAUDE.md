@@ -10,7 +10,8 @@
 - `cli::NAME` / `VERSION`：程序名与版本；`Options{service, panel, open_only, data_dir, auto_start}`；`Parsed::Run(Options)` / `Parsed::Print(String)`；`help_text()`、`parse<I>(args) -> Result<Parsed>`。
 - `runtime::RuntimeHandle`：`new(config, logger, firewall, paths)`、`read(f)`、`config()`、`started_at_ms()`、`data_dir()`、`enqueue(Action) -> bool`、`persist_bans()`、`start() -> Result<()>`、`stop()`、`select_adapter(ip) -> Result<()>`、`apply_config(cfg) -> Result<()>`、`logs(limit)`。
 - `runtime::Action`：`Ban(BanRequest)` / `Unban(Ip)` / `SyncSystemRules`；`BanRequest{ip, reason, protocol, service_port, remote_port, attempt_count, permanent_override}`。
-- `runtime::Inner`：共享运行状态（config / engine / bans / events / capture / local_ip 等），同一把锁下保证快照一致。
+- `runtime::Inner`：共享运行状态（config / engine / bans / events / capture / local_ip / observer 等），同一把锁下保证快照一致；另提供 `capture_diagnostics`、`count_accept`、`reset_observer`。
+- `runtime::OBSERVE_TOP_LIMIT`：面板「抓包观测」展示条数（12）。
 - `controller::Controller`：`new(rt, paths, logger)`，实现 `PortGuardApi`（status / connections / bans / config / save_config / start / stop / ban_ip / unban_ip / 名单增删 / logs / events / adapters / select_adapter / set_protection / data_dir）；额外持有 `RwLock<GeoLookup>`（地理位置展示，`reload_geo` / `location_of` / `with_geo`）。
 - `main`：`fn main()`（无参入口，`std::process::exit(run())`）。
 
@@ -20,6 +21,8 @@
 - **失败不得假装成功**（规范 26.1）：`apply_ban` 先 `firewall.block_ip` 成功后才更新内存状态，失败则移除 `pending` 并写 error 事件 + 日志；到期解封删除规则失败时保持内存不变，让用户看到真实差异。
 - **封停后不删除跟踪行**：`apply_ban` 只更新 `bans`，跟踪表记录保留，`Inner::connection_rows` 依 `bans.is_banned` 把状态标为 `BANNED` / `PERMANENT`，用户仍能看到该 IP 打的是哪个端口、累计多少次；行本身按 5 分钟 TTL 与 10 分钟保留期自然回收。
 - **保护端口全空必须告警**：`RuntimeHandle::new` 检测 `config.has_any_protected_port()`，全空时写一条 `warn` 事件（面板可见）与告警日志，避免「程序在跑但零保护」这种静默失效。
+- **先观测再判定**：`PacketSink::consume` 在 `engine.evaluate` **之前**把包记入 `Inner::observer`，被判定层丢弃的包同样要留下记录，否则无法分辨「没抓到」与「被丢掉」。
+- **连接事件来源可自动回退**：`accept_pass`（随 5 秒 PRUNE 周期跑）在「受保护 TCP 端口无入站 SYN + 有本机发出的 SYN+ACK」同时成立时自动 `engine.set_count_accept(true)`，写 `warn` 事件与日志说明原因。该判定只做一次：配置里 `count_accept` 被显式改动（`apply_config` 检测到值变化）或启动时即为 `true`，都视为用户已决定，之后永不覆盖；只有自动切换的结果在换网卡时允许重新判定。重新开始抓包与切换网卡都要 `reset_observer`。
 - **禁止直接调用 netsh**：所有防火墙操作经 `portguard-firewall` 的 `FirewallBackend` trait；`netsh` 仅由该 crate 内部执行，本 crate 不拼命令。
 - **单实例**：`SingleInstance::acquire()` 返回 `Ok(None)` 时打开已有实例的面板后退出，不启动第二个监听器。
 - **白名单硬校验**：`ban_ip` 与 `blacklist_add` 落库前查白名单；`whitelist_add` 后立即对已封停地址入队解封。
@@ -32,8 +35,8 @@
 
 ## 测试
 - 位置：内联 `#[cfg(test)] mod tests`（`cli.rs` / `main.rs` / `controller.rs` / `runtime.rs`）。
-- 关键用例：`默认选项符合预期` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长` / `封停后跟踪行保留并标记状态` / `保护端口为空时启动会写入告警事件`。
-- 测试数量：28 个 `#[test]`（cli 6、main 3、controller 11、runtime 8）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
+- 关键用例：`默认选项符合预期` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长` / `封停后跟踪行保留并标记状态` / `保护端口为空时启动会写入告警事件` / `观测表记录被判定层丢弃的包` / `入站不可见时自动改用握手响应` / `入站可见时不做自动切换` / `用户显式设置后不再自动改写`。
+- 测试数量：32 个 `#[test]`（cli 6、main 3、controller 11、runtime 12）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
 
 ## 依赖关系
 - 依赖：`portguard-core`、`portguard-packet`、`portguard-firewall`、`portguard-storage`、`portguard-win`、`portguard-rdp`、`portguard-geo`、`portguard-web`，以及 `serde` / `serde_json` / `thiserror` / `windows`。

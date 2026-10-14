@@ -63,6 +63,37 @@ impl PortGroup {
     }
 }
 
+/// TCP 标志位类别（观测用）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlagClass {
+    /// 纯 `SYN`：客户端连接请求。
+    Syn,
+    /// `SYN+ACK`：服务端握手响应。
+    SynAck,
+    /// `RST`：连接被拒绝或异常中断。
+    Reset,
+    /// `FIN`：挥手。
+    Finish,
+    /// 仅 `ACK`：数据或确认。
+    Ack,
+    /// 其它组合。
+    Other,
+}
+
+impl FlagClass {
+    pub fn label(&self) -> &'static str {
+        match self {
+            FlagClass::Syn => "SYN",
+            FlagClass::SynAck => "SYN+ACK",
+            FlagClass::Reset => "RST",
+            FlagClass::Finish => "FIN",
+            FlagClass::Ack => "ACK",
+            FlagClass::Other => "其它",
+        }
+    }
+}
+
 /// TCP 标志位。不使用 bitflags 依赖，直接 6 个 bool，语义清晰且零成本。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TcpFlags {
@@ -80,6 +111,31 @@ impl TcpFlags {
     /// 规范 4.1：`SYN && !ACK` 才算连接请求；`SYN+ACK` 是服务端响应，不能计入客户端重连次数。
     pub fn is_connection_request(&self) -> bool {
         self.syn && !self.ack
+    }
+
+    /// 是否为「服务端已接受连接」的握手响应（`SYN && ACK`）。
+    ///
+    /// 只在把服务端应答当作连接事件来源时使用（见 `ProtectConfig::count_accept`）：
+    /// 该信号由本机发出，不依赖混杂模式能否收到入站包。
+    pub fn is_handshake_accepted(&self) -> bool {
+        self.syn && self.ack
+    }
+
+    /// 标志位类别，用于观测统计（只关心与连接建立相关的几类）。
+    pub fn class(&self) -> FlagClass {
+        if self.syn && self.ack {
+            FlagClass::SynAck
+        } else if self.syn {
+            FlagClass::Syn
+        } else if self.rst {
+            FlagClass::Reset
+        } else if self.fin {
+            FlagClass::Finish
+        } else if self.ack {
+            FlagClass::Ack
+        } else {
+            FlagClass::Other
+        }
     }
 
     /// 是否携带 RST（连接被拒绝 / 异常中断）。

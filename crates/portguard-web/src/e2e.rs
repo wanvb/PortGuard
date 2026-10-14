@@ -137,6 +137,8 @@ fn 首页与静态资源可访问() {
     // 判定明细区与受保护端口明细是排查「端口无记录」的入口，不能被删掉
     assert!(body.contains("ignore-stats"), "首页应包含判定明细容器");
     assert!(body.contains("stat-ports-foot"), "受保护端口卡应有明细脚注");
+    assert!(body.contains("tbody-observe"), "首页应包含抓包观测表格");
+    assert!(body.contains("cfg-count-accept"), "设置页应包含连接事件来源开关");
 
     let (head, body) = split_response(&h.get("/assets/app.js"));
     assert!(head.contains("200"));

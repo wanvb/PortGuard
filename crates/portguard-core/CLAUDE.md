@@ -10,14 +10,15 @@
 ## 对外接口
 | 模块 | pub 类型 / 关键函数 | 说明 |
 |------|------|------|
-| `model` | `Ip`（= `Ipv4Addr`）、`Protocol`、`TrafficDirection`、`PortGroup`、`TcpFlags`、`PacketInfo`、`BanReason`、`BanRecord`、`IgnoreCounters`、`Statistics` | 领域数据结构与 `Display`/`label`/`as_str` 辅助；`Statistics.ignored` 承载被丢弃数据包的分类计数 |
-| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退 |
+| `model` | `Ip`（= `Ipv4Addr`）、`Protocol`、`TrafficDirection`、`PortGroup`、`TcpFlags`、`FlagClass`、`PacketInfo`、`BanReason`、`BanRecord`、`IgnoreCounters`、`Statistics` | 领域数据结构与 `Display`/`label`/`as_str` 辅助；`Statistics.ignored` 承载被丢弃数据包的分类计数；`TcpFlags::is_connection_request`（入站 SYN）与 `is_handshake_accepted`（出站 SYN+ACK）是两种连接事件来源 |
+| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（默认 `false`，规范 4.1） |
+| `observe` | `Observer`、`Observation`、`MAX_ENTRIES`、`direction_label` | 纯诊断的抓包观测表：按「方向 + 协议 + 本机端口 + 标志类别」计数，`observe` / `top` / `count_matching` / `clear` / `overflow` |
 | `iprange` | `IpRange`、`IpSet`、`parse_ipv4`、`u32_to_ip` | 支持单 IP / 区间 / 末段通配 / CIDR / 多段通配；`IpSet::from_rules` 任一条非法即整体失败 |
 | `tracker` | `TrackKey`、`TrackEntry`、`ConnectionTracker` | `record` 返回当前窗口计数；`peek_count`、`prune`、`remove_ip`、`iter_entries` |
 | `ban` | `RULE_PREFIX`、`ban_rule_name`、`is_own_rule`、`BanManager` | `make_record`、`ban`、`unban`、`take_expired`、`restore`、`snapshot` |
-| `engine` | `RuleEngine`、`Outcome`、`EngineStats`、`ConnectionRow`、`FLAG_SYN` | `new`、`reload`、`set_local_ip`、`evaluate`、`connection_rows`、`prune`、`protected_port_count`；`EngineStats.ignored` 与 `Outcome::Ignored` 的 `reason` 一一对应 |
+| `engine` | `RuleEngine`、`Outcome`、`EngineStats`、`ConnectionRow`、`FLAG_SYN` | `new`、`reload`、`set_local_ip`、`evaluate`、`connection_rows`、`prune`、`protected_port_count`、`set_count_accept` / `count_accept`；`EngineStats.ignored` 与 `Outcome::Ignored` 的 `reason` 一一对应 |
 | `logging` | `Level`、`LogLine`、`LogBuffer` | `push`、`tail`、`render` |
-| `api` | `PortGuardApi`（trait）、`StatusView`、`ConnectionView`、`BanView`、`AdapterView`、`EventView`、`BanSource`、`ProtectionSwitch`、`protocol_label`、`reason_label` | 表现层唯一依赖面，全部方法必须快速返回；`StatusView` 含 `geo_ready` / `geo_status`，`ConnectionView` / `BanView` 含 `location`（纯展示，规范 22） |
+| `api` | `PortGuardApi`（trait）、`StatusView`、`ConnectionView`、`BanView`、`AdapterView`、`EventView`、`ObservedPortView`、`BanSource`、`ProtectionSwitch`、`protocol_label`、`reason_label` | 表现层唯一依赖面，全部方法必须快速返回；`StatusView` 含 `geo_ready` / `geo_status` / `parse_errors` / `parse_samples` / `observed` / `count_accept`，`ConnectionView` / `BanView` 含 `location`（纯展示，规范 22） |
 | `error` | `AppError`、`Result<T>` | 全项目统一错误类型 |
 | `time` | `now_ms`、`format_ms`、`format_ms_with_offset`、`DEFAULT_UTC_OFFSET_MINUTES` | 纯整数民用历法换算，不引入 chrono |
 | 顶层 | `VERSION`（取自 `CARGO_PKG_VERSION`） | — |
@@ -29,6 +30,8 @@
 - 白名单优先最高，任何路径（threshold / blacklist / manual / restore）都不得封停白名单 IP（规范 26.2）；`BanManager::ban` 命中白名单必须返回 `Err`，不得假装成功。
 - 白名单命中即返回，**不参与阈值判定**；但可计数的包（TCP 为 `SYN && !ACK`、UDP 任意报文）在端口属于某保护组时会经 `record_display_only` 写入跟踪表，仅用于面板展示 `WHITELIST` 状态，不得累加阈值、不得产生封停。
 - 判定中每条丢弃路径都必须累加对应的 `IgnoreCounters`，禁止新增无计数的静默丢弃分支（否则面板无法区分抓包问题与判定问题）。
+- `observe` 模块的观测表（`Observer`）绝不参与判定，也不得因判定结果而丢弃记录；它只回答「这个端口的包有没有被收到」，条目上限 256，超出只累加 `overflow`。
+- 连接事件来源只有两种且互斥：`count_accept == false` 时用入站 `SYN && !ACK`；为 `true` 时改用本机发出的 `SYN+ACK`（云主机混杂模式收不到入站包时使用，见 `docs/behavior-spec.md` 2.1.2）。不得两路同时累加，否则同一次连接会被计两次。
 - `Config::validate` 必须拒绝「三组保护端口全空」的配置：这种配置下程序运行但零保护能力，属静默失效。
 - 一切封停必须经 `BanManager`，UI 与引擎不得直接操作封停 Map（规范 7）。
 - 防火墙规则归属靠 `RULE_PREFIX = "PortGuard-Ban-"` 前缀识别；`is_own_rule` 用于清理时精确筛选，绝不得按 IP 无条件删除系统或第三方规则（规范 8.4）。
@@ -40,12 +43,13 @@
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。
-- 分布：`ban.rs` 11、`config.rs` 12、`engine.rs` 25、`iprange.rs` 11、`logging.rs` 5、`time.rs` 5、`tracker.rs` 10。
-- 合计 `#[test]`：79 个。
+- 分布：`ban.rs` 11、`config.rs` 12、`engine.rs` 29、`iprange.rs` 11、`logging.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 10。
+- 合计 `#[test]`：88 个。
 - 关键用例：
   - `ban`：白名单地址手动封停同样被拒绝、永久封停不会被临时封停降级、恢复时丢弃白名单记录并可用到期回收清理防火墙、规则名前缀可识别归属。
   - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝。
-  - `engine`：白名单优先于黑名单、超阈值触发封停、握手响应不算新连接、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
+  - `engine`：白名单优先于黑名单、超阈值触发封停、入站口径下握手响应不算新连接、`count_accept` 打开后出站 SYN+ACK 计一次、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
+  - `observe`：入站与出站分别归类、同键累计次数、条目上限不会无限增长、可按条件统计服务端口、非本机流量归入端口零。
   - `iprange`：区间写反时自动纠正、多段通配、非尾部通配判定非法、规则集遇非法规则整体失败。
   - `tracker`：窗口滑出后旧事件不再计数、生命周期累计计数不受窗口影响、条目上限触发淘汰不会无限增长。
   - `time`：已知时间点换算正确、闰年二月正确处理、时区偏移可配置。

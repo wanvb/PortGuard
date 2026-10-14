@@ -23,17 +23,74 @@ use crate::parser::parse_ethernet_or_ip;
 use portguard_core::error::{AppError, Result};
 use portguard_core::model::Ip;
 use portguard_core::time::now_ms;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// 抓包回调收到的事件。
 pub use crate::parser::ParsedPacket;
+
+/// 抓包诊断信息。
+#[derive(Clone, Debug, Default)]
+pub struct CaptureDiagnostics {
+    /// 解析失败的包数（非 IPv4 / 分片 / 畸形包）。
+    pub parse_errors: u64,
+    /// 最近几次失败的说明样本（最多 [`PARSE_SAMPLE_LIMIT`] 条）。
+    pub parse_samples: Vec<String>,
+}
+
+/// 保留的解析失败样本条数。
+pub const PARSE_SAMPLE_LIMIT: usize = 3;
 
 /// 抓包句柄。析构时自动停止并回收线程。
 pub struct CaptureHandle {
     running: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
     local_ip: Ip,
+    diagnostics: Arc<CaptureCounters>,
+}
+
+/// 抓包线程与调用方共享的计数器。
+#[derive(Debug, Default)]
+struct CaptureCounters {
+    parse_errors: AtomicU64,
+    samples: std::sync::Mutex<Vec<String>>,
+}
+
+impl CaptureCounters {
+    /// 记录一次解析失败：计数 + 保留前若干条样本（含长度与首部十六进制）。
+    fn record_parse_error(&self, err: &AppError, raw: &[u8]) {
+        self.parse_errors.fetch_add(1, Ordering::Relaxed);
+        let mut samples = match self.samples.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        if samples.len() >= PARSE_SAMPLE_LIMIT {
+            return;
+        }
+        // 只保留十六进制，避免把不可信字节当成文本写入日志/面板
+        let preview: Vec<String> = raw
+            .iter()
+            .take(24)
+            .map(|b| format!("{:02X}", b))
+            .collect();
+        samples.push(format!(
+            "{} 字节：{}（{}）",
+            raw.len(),
+            preview.join(" "),
+            err
+        ));
+    }
+
+    fn snapshot(&self) -> CaptureDiagnostics {
+        let samples = match self.samples.lock() {
+            Ok(g) => g.clone(),
+            Err(e) => e.into_inner().clone(),
+        };
+        CaptureDiagnostics {
+            parse_errors: self.parse_errors.load(Ordering::Relaxed),
+            parse_samples: samples,
+        }
+    }
 }
 
 impl CaptureHandle {
@@ -55,6 +112,11 @@ impl CaptureHandle {
     /// 当前监听的地址。
     pub fn local_ip(&self) -> Ip {
         self.local_ip
+    }
+
+    /// 抓包层诊断（解析失败计数与样本）。
+    pub fn diagnostics(&self) -> CaptureDiagnostics {
+        self.diagnostics.snapshot()
     }
 }
 
@@ -192,6 +254,8 @@ mod platform {
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = Arc::clone(&running);
+        let diagnostics = Arc::new(CaptureCounters::default());
+        let counters_thread = Arc::clone(&diagnostics);
         let sock_thread = SendSocket(sock);
 
         let join = std::thread::Builder::new()
@@ -210,8 +274,9 @@ mod platform {
                             }
                             Err(e) => {
                                 // 畸形包、分片包、非 IPv4 包都属于常态，不当作错误上报，
-                                // 否则日志会被噪声淹没。
-                                let _ = e;
+                                // 否则日志会被噪声淹没；但必须留下计数与样本，
+                                // 否则「某个端口的包完全没反应」时无法区分是没抓到还是被解析丢掉。
+                                counters_thread.record_parse_error(&e, &buf[..len]);
                             }
                         }
                         continue;
@@ -238,6 +303,7 @@ mod platform {
             running,
             join: Some(join),
             local_ip,
+            diagnostics,
         })
     }
 }

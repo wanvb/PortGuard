@@ -24,6 +24,8 @@
 - **请求体上限**：`MAX_BODY = 1 MiB`，超限或未声明长度时用 `take` 限制实际读取量，防御超大请求撑爆内存；错误以 `{"error":"中文说明"}` 返回。
 - **前端数据必须经 textContent 写入**：`app.js` 禁止用 `innerHTML` 拼接来自接口的数据，防 XSS（`assets.rs` 测试守住该约定）；地理位置文本同样按外部数据对待。
 - **概览必须显示判定明细**：`status.stats.ignored` 的五项计数渲染到 `#ignore-stats`，是排查「端口无记录」的第一入口；「受保护端口」卡片副标 `#stat-ports-foot` 必须列出三组实际端口，不能只给总数（三组全空时显示提示文案）。
+- **概览必须显示抓包观测**：`status.observed` 渲染到 `#tbody-observe`（方向 / 协议 / 本机端口 / 标志 / 包数，最多 12 行），回答「这个端口的包到底有没有被收到」；`status.parse_errors` / `parse_samples` 渲染到 `#parse-note`，用于区分「没抓到」与「解析器丢了」，`count_accept` 打开时同一行要说明当前按 SYN+ACK 统计。空态文案必须区分「保护未启动」与「还没抓到任何包」。
+- **设置页必须有连接事件来源开关**：`#cfg-count-accept` 读写 `protect.count_accept`，说明文字指向概览页的抓包观测；`collectSettings` 必须把它写回配置对象，否则用户改了会被静默丢弃（历史上保护端口曾因同类问题被包成对象导致请求体解析失败）。
 - **地理位置列是纯展示**：`ConnectionView.location` / `BanView.location` 只渲染，不参与筛选以外的任何逻辑；筛选框对 `location` 做子串匹配便于按地区查找。
 - **资源内嵌单 exe**：前端经 `include_str!` 进二进制，改前端必须重编译；静态资源响应带 `no-cache`，避免升级后浏览器仍用旧前端。
 - **参数错误返回 400、服务端问题返回 500**：`map_error` 将 `InvalidIpRule` / `Config` 归为 400；`limit` 参数按区间夹取，未知接口 404。

@@ -54,6 +54,11 @@ mod tests {
             "id=\"quick-switches\"",
             "id=\"protect-rows\"",
             "id=\"logs\"",
+            // 诊断区：没有这两个挂载点，面板就无法回答「包到底有没有被抓到」
+            "id=\"ignore-stats\"",
+            "id=\"parse-note\"",
+            "id=\"tbody-observe\"",
+            "id=\"cfg-count-accept\"",
         ] {
             assert!(INDEX_HTML.contains(id), "首页缺少挂载点 {}", id);
         }

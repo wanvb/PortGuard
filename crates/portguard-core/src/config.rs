@@ -59,6 +59,13 @@ pub struct ProtectConfig {
     pub udp: ProtectionRule,
     /// TCP-WEB 保护端口（原程序中的 WEB 分类，非硬编码 80/443）。
     pub http: ProtectionRule,
+    /// 是否把「服务端握手响应（SYN+ACK）」也当成一次连接事件。
+    ///
+    /// 默认关闭（规范 4.1 只认入站 `SYN && !ACK`）。但在部分云主机上，
+    /// 混杂模式收不到入站包（同类工具的原程序正是因此改用 SYN+ACK 累计），
+    /// 打开本项后 TCP 事件改由本机发出的握手响应产生，不再依赖入站可见性。
+    /// 运行期发现「入站 SYN 一个都没有、出站 SYN+ACK 却有」时会自动启用并在事件流说明。
+    pub count_accept: bool,
 }
 
 /// 默认保护端口。
@@ -84,6 +91,7 @@ impl Default for ProtectConfig {
                 window_seconds: 10,
                 max_attempts: 10,
             },
+            count_accept: false,
         }
     }
 }

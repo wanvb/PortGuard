@@ -195,6 +195,8 @@ function renderStatus() {
   $("stat-packets").textContent = fmtNumber(s.stats.captured_packets);
   $("stat-packets-foot").textContent = `累计封停 ${fmtNumber(s.stats.total_bans)} 次`;
   renderIgnoreStats(s);
+  renderParseNote(s);
+  renderObserve(s);
 
   $("foot-version").textContent = `PortGuard v${s.version}`;
   $("badge-connections").textContent = state.connections.length;
@@ -253,6 +255,58 @@ function renderIgnoreStats(s) {
         el("div", { class: "stat-foot", text: it.hint }),
       ])
     );
+  }
+}
+
+/** 解析失败说明：区分「没抓到」与「抓到但解析器丢了」。 */
+function renderParseNote(s) {
+  const box = $("parse-note");
+  if (!box) return;
+  const errs = s.parse_errors || 0;
+  const samples = s.parse_samples || [];
+  let text = errs
+    ? `解析失败的包 ${fmtNumber(errs)} 个（非 IPv4 / 分片 / 畸形包）`
+    : "解析失败的包 0 个";
+  if (s.count_accept) {
+    text += "；当前按「服务端握手响应（SYN+ACK）」统计连接事件";
+  }
+  if (samples.length) {
+    text += `。样本：${samples.join(" | ")}`;
+  }
+  box.textContent = text;
+}
+
+/** 抓包观测表：混杂模式实际收到了哪些包，按次数排序。 */
+function renderObserve(s) {
+  const body = $("tbody-observe");
+  if (!body) return;
+  body.textContent = "";
+  const rows = s.observed || [];
+  if (!rows.length) {
+    body.appendChild(
+      el("tr", {}, [
+        el("td", { colspan: "5" }, [
+          el("div", { class: "empty" }, [
+            el("strong", { text: s.running ? "还没抓到任何包" : "保护未启动" }),
+            el("span", {
+              text: s.running
+                ? "先发起一次连接，再回来看这里出现了哪个端口"
+                : "点击「开始保护」后才能看到实际抓到的包",
+            }),
+          ]),
+        ]),
+      ])
+    );
+    return;
+  }
+  for (const o of rows) {
+    const row = el("tr");
+    row.appendChild(el("td", {}, [el("span", { class: "badge group", text: o.direction })]));
+    row.appendChild(el("td", { class: "mono", text: o.protocol }));
+    row.appendChild(el("td", { class: "mono", text: String(o.port) }));
+    row.appendChild(el("td", { class: "mono", text: o.flags }));
+    row.appendChild(el("td", { class: "mono", text: fmtNumber(o.count) }));
+    body.appendChild(row);
   }
 }
 
@@ -513,6 +567,7 @@ function renderSettings() {
   $("cfg-log-lines").value = cfg.logging.max_memory_lines;
   $("cfg-geo-enabled").checked = cfg.geo.enabled;
   $("cfg-geo-db").value = cfg.geo.db;
+  $("cfg-count-accept").checked = !!cfg.protect.count_accept;
 
   // 保护端口三组
   const box = $("protect-rows");
@@ -624,6 +679,8 @@ function collectSettings() {
     base.protect[g.key].window_seconds = collectNumber(g.key, "window_seconds");
     base.protect[g.key].max_attempts = collectNumber(g.key, "max_attempts");
   }
+
+  base.protect.count_accept = $("cfg-count-accept").checked;
 
   for (const input of document.querySelectorAll("[data-system]")) {
     base.system[input.getAttribute("data-system")] = input.checked;

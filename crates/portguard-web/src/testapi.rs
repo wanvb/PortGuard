@@ -7,7 +7,8 @@
 //! 保存配置时做校验——这样测试才能真正覆盖到错误分支。
 
 use portguard_core::api::{
-    AdapterView, BanView, ConnectionView, EventView, PortGuardApi, ProtectionSwitch, StatusView,
+    AdapterView, BanView, ConnectionView, EventView, ObservedPortView, PortGuardApi,
+    ProtectionSwitch, StatusView,
 };
 use portguard_core::config::Config;
 use portguard_core::error::{AppError, Result};
@@ -197,6 +198,26 @@ impl PortGuardApi for MockApi {
                 rdp_enabled: s.config.rdp.enabled,
                 geo_ready: true,
                 geo_status: "test/ip2region_v4.xdb".to_string(),
+                // 桩接口给一组非零诊断数据，保证面板的观测区在端到端测试里也被渲染
+                parse_errors: 4,
+                parse_samples: vec!["60 字节：45 00 00 3C 00 00 00 00（IPv4 分片暂不支持）".to_string()],
+                observed: vec![
+                    ObservedPortView {
+                        direction: "入站".to_string(),
+                        protocol: "TCP".to_string(),
+                        port: 3389,
+                        flags: "SYN".to_string(),
+                        count: 9,
+                    },
+                    ObservedPortView {
+                        direction: "出站".to_string(),
+                        protocol: "TCP".to_string(),
+                        port: 3389,
+                        flags: "SYN+ACK".to_string(),
+                        count: 5,
+                    },
+                ],
+                count_accept: false,
             }
         })
     }

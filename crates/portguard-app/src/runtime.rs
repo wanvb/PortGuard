@@ -22,10 +22,11 @@ use portguard_core::engine::RuleEngine;
 use portguard_core::error::{AppError, Result};
 use portguard_core::iprange::{parse_ipv4, IpSet};
 use portguard_core::logging::{Level, LogLine};
-use portguard_core::model::{BanReason, Ip, PacketInfo, PortGroup, Protocol};
+use portguard_core::model::{BanReason, FlagClass, Ip, PacketInfo, PortGroup, Protocol};
+use portguard_core::observe::Observer;
 use portguard_core::time::now_ms;
 use portguard_firewall::{cleanup_orphans, FirewallBackend, RuleDirection};
-use portguard_packet::{capture, CaptureHandle};
+use portguard_packet::{capture, CaptureDiagnostics, CaptureHandle};
 use portguard_rdp::policy as rdp_policy;
 use portguard_storage::{AppPaths, BanStore, Logger};
 
@@ -45,6 +46,13 @@ const RDP_PASS: Duration = Duration::from_secs(15);
 /// 保护端口全空时的启动告警文案。
 const EMPTY_PROTECT_WARNING: &str =
     "保护端口为空：不会统计任何连接、也不会自动封停，请在设置页填写保护端口";
+
+/// 面板「抓包观测」展示的条数上限。
+pub const OBSERVE_TOP_LIMIT: usize = 12;
+
+/// 自动切换连接事件来源时的说明文案（会进日志与事件流）。
+const AUTO_ACCEPT_NOTICE: &str = "该网卡收不到入站 SYN（混杂模式只看到本机发出的包），\
+已自动改用本机发出的握手响应（SYN+ACK）统计连接事件，可在设置页关闭";
 
 /// 一次封停请求。
 #[derive(Clone, Debug)]
@@ -83,6 +91,15 @@ pub struct Inner {
     pub adapter_desc: String,
     pub captured_packets: u64,
     pub total_bans: u64,
+    /// 抓包观测表：记录「实际收到了什么」，纯诊断，不参与判定。
+    ///
+    /// 存在的理由是回答「端口完全没反应」这一类问题：没有它就只能靠猜，
+    /// 分不清「没抓到」「抓到但标志不对」「抓到但被判定层丢掉」三种情况。
+    pub observer: Observer,
+    /// 是否已经就「连接事件来源」做过一次自动判定（含用户显式设置）。
+    accept_decided: bool,
+    /// 是否由运行期自动启用了「统计服务端应答」。
+    auto_accept: bool,
     /// 已入队但尚未落到防火墙的 IP，避免同一攻击源重复排队。
     pending: HashSet<u32>,
 }
@@ -107,6 +124,9 @@ impl PacketSink {
             Some(ip) => ip,
             None => return,
         };
+        // 观测必须发生在判定之前：即使这个包马上会被判定层丢掉，
+        // 也要能在面板上看到「它确实到过这里」，否则无从区分丢在哪一层。
+        g.observer.observe(&pkt, local_ip);
         let peer = pkt.peer_ip(local_ip);
         let outcome = g.engine.evaluate(&pkt);
 
@@ -186,6 +206,37 @@ impl Inner {
             .as_ref()
             .map(|c| c.is_running())
             .unwrap_or(false)
+    }
+
+    /// 抓包层诊断（解析失败计数与样本）；未启动时返回全零。
+    pub fn capture_diagnostics(&self) -> CaptureDiagnostics {
+        self.capture
+            .as_ref()
+            .map(|c| c.diagnostics())
+            .unwrap_or_default()
+    }
+
+    /// 当前生效的连接事件来源：是否把服务端握手响应当作一次连接事件。
+    pub fn count_accept(&self) -> bool {
+        self.engine.count_accept()
+    }
+
+    /// 根据配置与自动判定结果重算「连接事件来源」。
+    fn apply_accept_mode(&mut self, requested: bool) {
+        self.engine.set_count_accept(requested || self.auto_accept);
+    }
+
+    /// 重开抓包或换网卡后，旧的观测数据不再代表当前网卡。
+    fn reset_observer(&mut self, redetect: bool) {
+        self.observer.clear();
+        // 换网卡要重新观测：新网卡的混杂模式行为可能完全不同。
+        // 但只针对「运行期自己判定出来的」结果重来，用户显式设置过就不再自动覆盖。
+        if redetect && self.auto_accept {
+            self.accept_decided = false;
+            self.auto_accept = false;
+            let requested = self.config.protect.count_accept;
+            self.apply_accept_mode(requested);
+        }
     }
 
     /// 生成面板用的连接行。
@@ -275,6 +326,8 @@ impl RuntimeHandle {
         };
 
         let protect_empty = !config.has_any_protected_port();
+        // 配置里已经把「统计服务端应答」写成开或关，都视作用户的决定。
+        let accept_decided = config.protect.count_accept;
 
         let inner = Arc::new(Mutex::new(Inner {
             engine: RuleEngine::new(&config, local_ip.unwrap_or(Ip::UNSPECIFIED)),
@@ -286,6 +339,9 @@ impl RuntimeHandle {
             adapter_desc: String::new(),
             captured_packets: 0,
             total_bans: 0,
+            observer: Observer::new(),
+            accept_decided,
+            auto_accept: false,
             pending: HashSet::new(),
         }));
 
@@ -372,6 +428,8 @@ impl RuntimeHandle {
         let handle = start_capture(&self.inner, &self.tx, &self.logger, ip)?;
         g.capture = Some(handle);
         g.engine.set_local_ip(ip);
+        // 每次重新开始抓包都从头观测，避免拿停止期间的旧数据做判断。
+        g.reset_observer(false);
         g.push_event("system", format!("已开始保护：{}", ip), Some(ip.to_string()));
         drop(g);
 
@@ -418,6 +476,7 @@ impl RuntimeHandle {
             g.engine.set_local_ip(ip);
             g.engine.reset_tracking();
             g.config.network.adapter = ip.to_string();
+            g.reset_observer(true);
         }
 
         if was_running {
@@ -432,9 +491,16 @@ impl RuntimeHandle {
         let whitelist = IpSet::from_rules(&cfg.lists.whitelist)?;
         {
             let mut g = lock_inner(&self.inner);
+            // 用户显式改过「统计服务端应答」就不再自动覆盖，否则用户在设置页
+            // 关掉它以后会被运行期判定重新打开，看起来像设置没生效。
+            if cfg.protect.count_accept != g.config.protect.count_accept {
+                g.accept_decided = true;
+                g.auto_accept = false;
+            }
             g.engine.reload(&cfg);
             g.bans.set_whitelist(whitelist);
             g.config = cfg.clone();
+            g.apply_accept_mode(cfg.protect.count_accept);
             g.push_event("system", "配置已更新".to_string(), None);
         }
         self.logger.set_level(Level::parse(&cfg.logging.level));
@@ -516,6 +582,7 @@ fn worker_loop(
         let now = Instant::now();
         if now >= next_prune {
             expire_pass(&inner, firewall.as_ref(), &logger, &paths);
+            accept_pass(&inner, &logger);
             next_prune = now + PRUNE_PASS;
         }
         if now >= next_rdp {
@@ -713,6 +780,63 @@ fn expire_pass(
     if changed {
         persist(inner, paths, logger);
     }
+}
+
+/// 自动判定「连接事件来源」，解决本机收不到入站 SYN 的问题。
+///
+/// 背景：混杂模式（`SIO_RCVALL`）在部分云主机 / 网卡上只能看到**本机发出**的包，
+/// 入站方向的包一个都收不到（同类工具的原程序正是因此改用 SYN+ACK 累计）。
+/// 此时若只认入站 `SYN`，无论客户端怎么连都不会产生任何记录。
+///
+/// 判定必须同时满足，缺一不做切换：
+/// - 受保护的 TCP 端口上，入站纯 `SYN` 一条都没有；
+/// - 同一个端口上已经出现本机发出的 `SYN+ACK`（只有真的有人连进来才会有）。
+///
+/// 该判定只做一次；用户显式改过设置（`accept_decided`）后永不自动覆盖。
+fn accept_pass(inner: &Arc<Mutex<Inner>>, logger: &Arc<Logger>) {
+    let mut g = lock_inner(inner);
+    if g.accept_decided || g.auto_accept {
+        return;
+    }
+    let ports: HashSet<u16> = g
+        .config
+        .protect
+        .tcp
+        .ports
+        .iter()
+        .chain(g.config.protect.http.ports.iter())
+        .copied()
+        .collect();
+    if ports.is_empty() {
+        // 没有受保护的 TCP 端口，观察不出结论，等配置补上再说。
+        return;
+    }
+
+    let inbound_syn = g.observer.count_matching(|o| {
+        o.inbound && o.protocol == Protocol::Tcp && o.flags == FlagClass::Syn && ports.contains(&o.port)
+    });
+    if inbound_syn > 0 {
+        // 入站可见，规范 4.1 的原始口径就是对的，不再自动干预。
+        g.accept_decided = true;
+        return;
+    }
+    let outbound_syn_ack = g.observer.count_matching(|o| {
+        !o.inbound
+            && o.protocol == Protocol::Tcp
+            && o.flags == FlagClass::SynAck
+            && ports.contains(&o.port)
+    });
+    if outbound_syn_ack == 0 {
+        // 还没有任何证据，继续观察（用户可能只是还没连过）。
+        return;
+    }
+
+    g.auto_accept = true;
+    g.accept_decided = true;
+    g.apply_accept_mode(false);
+    g.push_event("warn", AUTO_ACCEPT_NOTICE.to_string(), None);
+    drop(g);
+    logger.warn(AUTO_ACCEPT_NOTICE.to_string());
 }
 
 /// RDP 客户端白名单巡检。
@@ -979,6 +1103,116 @@ mod tests {
             }),
             9
         );
+    }
+
+    /// 本机发出的握手响应（出站 SYN+ACK）。
+    fn syn_ack_packet(peer: &str, local: &str, local_port: u16) -> PacketInfo {
+        PacketInfo {
+            src: local.parse().unwrap(),
+            dst: peer.parse().unwrap(),
+            src_port: local_port,
+            dst_port: 51000,
+            protocol: Protocol::Tcp,
+            tcp_flags: portguard_core::model::TcpFlags {
+                syn: true,
+                ack: true,
+                ..Default::default()
+            },
+            length: 40,
+            timestamp_ms: 0,
+        }
+    }
+
+    fn sink_of(rt: &RuntimeHandle) -> PacketSink {
+        PacketSink {
+            inner: Arc::clone(&rt.inner),
+            tx: rt.tx.clone(),
+            logger: Arc::clone(&rt.logger),
+        }
+    }
+
+    #[test]
+    fn 观测表记录被判定层丢弃的包() {
+        let mut cfg = Config::with_defaults();
+        cfg.network.adapter = "192.168.1.10".to_string();
+        let (rt, _, _) = runtime_with(cfg);
+        let sink = sink_of(&rt);
+
+        // 8080 不在任何保护组内，判定层必然丢弃它
+        sink.consume(syn_packet("203.0.113.9", "192.168.1.10", 8080));
+
+        let rows = rt.read(|i| i.observer.top(10));
+        assert_eq!(rows.len(), 1, "被丢弃的包也必须留在观测表里");
+        assert_eq!(rows[0].port, 8080);
+        assert!(rows[0].inbound);
+        assert_eq!(rows[0].count, 1);
+        // 判定层确实把它丢掉了（没有产生跟踪行）
+        assert_eq!(rt.read(|i| i.engine.tracker.len()), 0);
+    }
+
+    #[test]
+    fn 入站不可见时自动改用握手响应() {
+        let mut cfg = Config::with_defaults();
+        cfg.network.adapter = "192.168.1.10".to_string();
+        let (rt, _, _) = runtime_with(cfg);
+        let sink = sink_of(&rt);
+
+        // 只有本机发出的 SYN+ACK（入站 SYN 一条都收不到）
+        for _ in 0..2 {
+            sink.consume(syn_ack_packet("203.0.113.9", "192.168.1.10", 3389));
+        }
+        accept_pass(&rt.inner, &rt.logger);
+
+        assert!(rt.read(|i| i.count_accept()), "应自动改用握手响应统计");
+        assert!(
+            rt.read(|i| i.events.iter().any(|e| e.kind == "warn"
+                && e.message.contains("入站 SYN"))),
+            "自动切换必须在事件流里说明原因"
+        );
+        // 生效后连接必须真的被跟踪到 3389（切换前的那两个包已被丢弃，不会补记）
+        sink.consume(syn_ack_packet("203.0.113.9", "192.168.1.10", 3389));
+        let rows = rt.read(|i| i.connection_rows());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].service_port, 3389);
+        assert_eq!(rows[0].ip, "203.0.113.9");
+    }
+
+    #[test]
+    fn 入站可见时不做自动切换() {
+        let mut cfg = Config::with_defaults();
+        cfg.network.adapter = "192.168.1.10".to_string();
+        let (rt, _, _) = runtime_with(cfg);
+        let sink = sink_of(&rt);
+
+        sink.consume(syn_packet("203.0.113.9", "192.168.1.10", 3389));
+        sink.consume(syn_ack_packet("203.0.113.9", "192.168.1.10", 3389));
+        accept_pass(&rt.inner, &rt.logger);
+
+        assert!(!rt.read(|i| i.count_accept()), "入站可见时不得改变事件来源");
+    }
+
+    #[test]
+    fn 用户显式设置后不再自动改写() {
+        let mut cfg = Config::with_defaults();
+        cfg.network.adapter = "192.168.1.10".to_string();
+        cfg.protect.count_accept = true;
+        let (rt, _, _) = runtime_with(cfg.clone());
+        // 用户在设置页把它关掉：此后视为已决定，运行期不得再自动打开
+        let mut off = cfg.clone();
+        off.protect.count_accept = false;
+        rt.apply_config(off).unwrap();
+
+        let sink = sink_of(&rt);
+        for _ in 0..2 {
+            sink.consume(syn_ack_packet("203.0.113.9", "192.168.1.10", 3389));
+        }
+        // 观测里确实有「出站 SYN+ACK 而无入站 SYN」的证据，否则本用例没有意义
+        assert!(rt.read(|i| i.observer.count_matching(|o| {
+            !o.inbound && o.flags == FlagClass::SynAck && o.port == 3389
+        })) > 0);
+
+        accept_pass(&rt.inner, &rt.logger);
+        assert!(!rt.read(|i| i.count_accept()), "不得覆盖用户的显式设置");
     }
 
     #[test]

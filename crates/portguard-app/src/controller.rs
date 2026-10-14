@@ -8,19 +8,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use portguard_core::api::{
-    protocol_label, AdapterView, BanView, ConnectionView, EventView, PortGuardApi,
-    ProtectionSwitch, StatusView,
+    protocol_label, AdapterView, BanView, ConnectionView, EventView, ObservedPortView,
+    PortGuardApi, ProtectionSwitch, StatusView,
 };
 use portguard_core::config::Config;
 use portguard_core::error::{AppError, Result};
 use portguard_core::iprange::{parse_ipv4, IpSet};
 use portguard_core::logging::LogLine;
 use portguard_core::model::{BanReason, Ip, Statistics};
+use portguard_core::observe;
 use portguard_core::time::now_ms;
 use portguard_geo::GeoLookup;
 use portguard_storage::{AppPaths, ConfigStore, Logger};
 
-use crate::runtime::{Action, BanRequest, RuntimeHandle};
+use crate::runtime::{Action, BanRequest, RuntimeHandle, OBSERVE_TOP_LIMIT};
 
 /// 面板与托盘共用的控制器。
 pub struct Controller {
@@ -136,6 +137,9 @@ impl PortGuardApi for Controller {
                 Some(ip) => ip.to_string(),
                 None => String::new(),
             };
+            // 抓包层诊断在锁内取快照（内部只有一次极短的计数器加锁），
+            // 放在这里可以保证与观测表来自同一时刻。
+            let parse = inner.capture_diagnostics();
             StatusView {
                 running: inner.running(),
                 adapter: adapter.clone(),
@@ -161,6 +165,21 @@ impl PortGuardApi for Controller {
                 rdp_enabled: cfg.rdp.enabled,
                 geo_ready: self.with_geo(|geo| geo.ready()),
                 geo_status: self.with_geo(|geo| geo.status().to_string()),
+                parse_errors: parse.parse_errors,
+                parse_samples: parse.parse_samples,
+                observed: inner
+                    .observer
+                    .top(OBSERVE_TOP_LIMIT)
+                    .into_iter()
+                    .map(|o| ObservedPortView {
+                        direction: observe::direction_label(o.inbound).to_string(),
+                        protocol: o.protocol.as_str().to_string(),
+                        port: o.port,
+                        flags: o.flags.label().to_string(),
+                        count: o.count,
+                    })
+                    .collect(),
+                count_accept: inner.count_accept(),
             }
         })
     }
