@@ -26,7 +26,6 @@
 - 操作必须幂等：`block_ip` / `block_ports` 先删同名规则再添加；`delete_rule` 对不存在的规则视为成功（解封幂等）。
 - 两种归属口径勿混用：`portguard_core::ban::is_own_rule` 仅认 `PortGuard-Ban-`（窄），`backend::is_our_rule` 认 `PortGuard-`（宽，含危险端口与 ICMP 规则）；`cleanup_orphans` 只清理窄口径的封停规则。
 - `NetshFirewall` 仅 Windows 编译；`rule_exists` 用 netsh 退出码判断，不解析本地化文本（规避系统语言差异）。
-> 待办：`netsh::collect_stale_rules` 的筛选条件 `OWN_SYSTEM_RULES.contains(..) || is_our_rule(..)` 后半项完全覆盖前半项，且当前无调用点，属冗余实现，与根 CLAUDE.md「避免冗余代码」相悖。
 
 ## 测试
 - 位置：各源文件内 `#[cfg(test)] mod tests`（`lib.rs` / `mock.rs` / `netsh.rs`）。

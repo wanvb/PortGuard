@@ -33,7 +33,6 @@
 - IP 匹配比较阶段统一用 `u32`，禁止逐包做字符串切割（规范 21）；`IpSet::from_rules` 任一条非法即整体失败，避免静默丢规则。
 - 时间不得用 `SystemTime` 直接参与逻辑，一律以调用方注入的 `now_ms` 表达，保证引擎与跟踪器可单测。
 
-> 待办：`engine.rs` 中 `record_and_judge`、`record_and_judge_web` 与 UDP 分支内的「记录 + 判定」逻辑三份近乎重复（仅 `ProtectionRule` 与 `PortGroup` 不同），与根 CLAUDE.md「避免冗余代码」不符，宜抽为按 `(规则, 分组)` 参数化的单一实现。
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。

@@ -23,12 +23,13 @@
 - **白名单硬校验**：`ban_ip` 与 `blacklist_add` 落库前查白名单；`whitelist_add` 后立即对已封停地址入队解封。
 - **锁中毒不瘫**：`lock_inner` 用 `unwrap_or_else(|e| e.into_inner())` 继续使用内部数据；非测试代码 `deny(clippy::unwrap_used, clippy::expect_used)`。
 - **端口顺延**：面板端口被占用时最多向后试 `PORT_FALLBACK_TRIES` 个端口，保证程序总能起来。
-- > 待办：规范 23 要求「无管理员权限时不允许启动 raw socket 监听」，而 `main.rs` 在非管理员时仅记录错误与打印警告，仍会继续并按 `auto_start` 尝试开始保护（启动抓包将在运行期失败并记日志，属行为偏差）。
+- **非管理员不启动保护**（规范 23）：非管理员时跳过自动开始保护并打印明确指引，而不是先启动再失败。
+- **服务模式**（`--service`）：由计划任务以 SYSTEM 在会话 0 拉起，既不建托盘也不自动打开浏览器（`should_open_browser` 三条件之一）。
 
 ## 测试
 - 位置：内联 `#[cfg(test)] mod tests`（`cli.rs` / `main.rs` / `controller.rs` / `runtime.rs`）。
 - 关键用例：`默认选项符合预期` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长`。
-- 测试数量：22 个 `#[test]`（cli 6、main 2、controller 8、runtime 6）。
+- 测试数量：23 个 `#[test]`（cli 6、main 3、controller 8、runtime 6）；`main` 侧含 `自动打开浏览器受三条件约束`。
 
 ## 依赖关系
 - 依赖：`portguard-core`、`portguard-packet`、`portguard-firewall`、`portguard-storage`、`portguard-win`、`portguard-rdp`、`portguard-web`，以及 `serde` / `serde_json` / `thiserror` / `windows`。
