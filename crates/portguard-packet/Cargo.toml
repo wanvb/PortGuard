@@ -1,0 +1,18 @@
+[package]
+name = "portguard-packet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+portguard-core.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    # WSAIoctl / OVERLAPPED 归属 System::IO，缺了它 SIO_RCVALL 无法调用。
+    "Win32_System_IO",
+] }

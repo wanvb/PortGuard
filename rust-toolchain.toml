@@ -1,0 +1,17 @@
+# 工具链锁定说明
+#
+# Rust 1.78 起官方将 Windows 10 定为最低支持版本，tier-1 的
+# x86_64-pc-windows-msvc 目标的 std 不再保证能在 Windows 7 SP1 上运行。
+#
+# 1.77.2 是最后一个原生支持 Windows 7 的稳定版，因此本项目锁定该版本。
+# 严禁在未做真机验证的情况下升级工具链。
+#
+# 连带约束：cargo 1.77 无法解析声明了 edition2024 的 crate manifest，
+# 因此 Cargo.lock 中的 toml_edit / indexmap 等传递依赖已用
+# `cargo update -p <crate> --precise <ver>` 降级，Cargo.lock 必须提交。
+
+[toolchain]
+channel = "1.77.2"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]

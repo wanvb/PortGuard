@@ -1,6 +1,35 @@
-[package]
-name = "PortGuard"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+
+[workspace.dependencies]
+# ---- 内部 crate ----
+portguard-core = { path = "crates/portguard-core" }
+portguard-packet = { path = "crates/portguard-packet" }
+portguard-firewall = { path = "crates/portguard-firewall" }
+portguard-storage = { path = "crates/portguard-storage" }
+portguard-win = { path = "crates/portguard-win" }
+portguard-rdp = { path = "crates/portguard-rdp" }
+portguard-web = { path = "crates/portguard-web" }
+
+# ---- 第三方（版本已按 Rust 1.77.2 的 MSRV 锁定，勿随意放宽）----
+serde = { version = "=1.0.197", features = ["derive"] }
+serde_json = "=1.0.114"
+toml = "=0.8.12"
+thiserror = "=1.0.58"
+tiny_http = "=0.12.0"
+windows = "=0.56.0"
+
+# ---- 发布配置：目标体积优先，兼顾 Win7 兼容 ----
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

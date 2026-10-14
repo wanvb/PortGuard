@@ -1,0 +1,31 @@
+//! portguard-win：Windows 平台适配层。
+//!
+//! 只放「必须与 Windows API 打交道」的能力，且全部限定在系统集成范围内：
+//!
+//! - `admin`           —— 管理员权限检查（抓包与防火墙的前提）
+//! - `single_instance` —— 命名互斥体单实例守卫
+//! - `timezone`        —— 本地时区偏移（日志时间戳）
+//! - `browser`         —— 打开控制面板地址
+//! - `autostart`       —— 计划任务开机自启
+//! - `tray`            —— 系统托盘图标与菜单
+//!
+//! 本层不包含抓包（`portguard-packet`）与防火墙（`portguard-firewall`），
+//! 避免职责重叠。
+
+// 非测试代码禁止 unwrap/expect（规范 26：失败必须显式处理）。
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
+pub mod admin;
+pub mod autostart;
+pub mod browser;
+pub mod single_instance;
+pub mod timezone;
+pub mod tray;
+pub mod wide;
+pub mod winerr;
+
+pub use admin::is_elevated;
+pub use autostart::Autostart;
+pub use browser::{open_url, panel_url};
+pub use single_instance::SingleInstance;
+pub use tray::{Tray, TrayAction, WM_TRAYICON};

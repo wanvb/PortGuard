@@ -1,0 +1,778 @@
+//! 规则引擎。
+//!
+//! 纯决策模块：输入一个 `PacketInfo`，输出一个 `Outcome`，不碰防火墙、不写磁盘、
+//! 不依赖 Windows API。所有分支均可用单元测试覆盖（规范 30）。
+//!
+//! 判定顺序严格遵循规范 5.1：
+//!
+//! ```text
+//! 白名单  →  黑名单  →  保护端口  →  次数阈值  →  封停
+//! ```
+
+use crate::config::{Config, ProtectionRule};
+use crate::iprange::IpSet;
+use crate::model::{Ip, PacketInfo, PortGroup, Protocol, TcpFlags};
+use crate::tracker::{ConnectionTracker, TrackKey};
+
+/// 原始 TCP 标志位常量集合，便于构造测试数据。
+pub const FLAG_SYN: TcpFlags = TcpFlags {
+    syn: true,
+    ack: false,
+    fin: false,
+    rst: false,
+    psh: false,
+    urg: false,
+};
+
+/// 65536 位端口表。使用 `Box<[bool; 65536]>`（64 KiB）换取 O(1) 判定，
+/// 比 HashSet 更省且无哈希开销（规范 21）。
+#[derive(Debug)]
+struct PortMask {
+    bits: Box<[bool; 65536]>,
+}
+
+impl PortMask {
+    fn new() -> Self {
+        PortMask {
+            bits: Box::new([false; 65536]),
+        }
+    }
+
+    fn build(ports: &[u16]) -> Self {
+        let mut m = PortMask::new();
+        for p in ports {
+            m.bits[*p as usize] = true;
+        }
+        m
+    }
+
+    #[inline]
+    fn contains(&self, port: u16) -> bool {
+        self.bits[port as usize]
+    }
+
+    fn count(&self) -> usize {
+        self.bits.iter().filter(|b| **b).count()
+    }
+}
+
+/// 单包判定结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// 命中白名单：永远放行，即使同时命中黑名单或已超阈值。
+    Whitelisted,
+    /// 命中黑名单：立即封停。
+    BlacklistBan,
+    /// 未超阈值，已计入统计。
+    Tracking {
+        group: PortGroup,
+        count: u32,
+        threshold: u32,
+    },
+    /// 超过阈值：应封停。
+    ThresholdBan {
+        group: PortGroup,
+        count: u32,
+        threshold: u32,
+    },
+    /// 与本机受保护端口无关，或不是有效的连接建立事件。
+    Ignored { reason: &'static str },
+}
+
+impl Outcome {
+    /// 是否应当触发封停（供上层控制器直接判断）。
+    pub fn should_ban(&self) -> bool {
+        matches!(
+            self,
+            Outcome::BlacklistBan | Outcome::ThresholdBan { .. }
+        )
+    }
+}
+
+/// 引擎累计统计。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EngineStats {
+    /// 累计处理的数据包。
+    pub packets: u64,
+    /// 白名单放行次数。
+    pub whitelisted: u64,
+    /// 黑名单命中次数。
+    pub blacklist_hits: u64,
+    /// 计入跟踪的事件数。
+    pub tracked_events: u64,
+    /// 超阈值次数。
+    pub threshold_hits: u64,
+}
+
+/// 「当前连接」视图行，供 Web 面板展示。
+#[derive(Clone, Debug)]
+pub struct ConnectionRow {
+    pub ip: Ip,
+    pub port: u16,
+    pub group: PortGroup,
+    /// 当前窗口内次数。
+    pub window_count: u32,
+    /// 生命周期累计次数。
+    pub total_count: u64,
+    pub first_seen_ms: u64,
+    pub last_seen_ms: u64,
+}
+
+/// 规则引擎。
+#[derive(Debug)]
+pub struct RuleEngine {
+    /// 本机被监听的 IPv4 地址。
+    local_ip: Ip,
+    whitelist: IpSet,
+    blacklist: IpSet,
+    tcp_mask: PortMask,
+    web_mask: PortMask,
+    udp_mask: PortMask,
+    tcp_rule: ProtectionRule,
+    web_rule: ProtectionRule,
+    udp_rule: ProtectionRule,
+    /// 是否把流出方向也计入阈值。
+    ///
+    /// 默认 `false`：只统计「外部 → 本机受保护端口」的入站请求，
+    /// 这是暴力破解与扫描的真实特征；把本机主动外连计入会误伤正常业务。
+    count_outbound: bool,
+    /// 连接跟踪器。
+    pub tracker: ConnectionTracker,
+    stats: EngineStats,
+}
+
+impl RuleEngine {
+    /// 依据配置构造引擎。
+    pub fn new(cfg: &Config, local_ip: Ip) -> Self {
+        let mut engine = RuleEngine {
+            local_ip,
+            whitelist: IpSet::default(),
+            blacklist: IpSet::default(),
+            tcp_mask: PortMask::new(),
+            web_mask: PortMask::new(),
+            udp_mask: PortMask::new(),
+            tcp_rule: ProtectionRule::default(),
+            web_rule: ProtectionRule::default(),
+            udp_rule: ProtectionRule::default(),
+            count_outbound: false,
+            tracker: ConnectionTracker::new(),
+            stats: EngineStats::default(),
+        };
+        engine.reload(cfg);
+        engine
+    }
+
+    /// 热更新配置（白名单解析失败时保留旧值，不静默清空规则）。
+    pub fn reload(&mut self, cfg: &Config) {
+        if let Ok(wl) = IpSet::from_rules(&cfg.lists.whitelist) {
+            self.whitelist = wl;
+        }
+        if let Ok(bl) = IpSet::from_rules(&cfg.lists.blacklist) {
+            self.blacklist = bl;
+        }
+        self.tcp_rule = cfg.protect.tcp.clone();
+        self.web_rule = cfg.protect.http.clone();
+        self.udp_rule = cfg.protect.udp.clone();
+        self.tcp_mask = PortMask::build(&self.tcp_rule.ports);
+        self.web_mask = PortMask::build(&self.web_rule.ports);
+        self.udp_mask = PortMask::build(&self.udp_rule.ports);
+    }
+
+    /// 切换监听 IP，并清空既有跟踪状态（换网卡后旧计数无意义）。
+    pub fn set_local_ip(&mut self, ip: Ip) {
+        self.local_ip = ip;
+        self.tracker.clear();
+    }
+
+    pub fn local_ip(&self) -> Ip {
+        self.local_ip
+    }
+
+    pub fn set_count_outbound(&mut self, v: bool) {
+        self.count_outbound = v;
+    }
+
+    pub fn stats(&self) -> EngineStats {
+        self.stats
+    }
+
+    /// 白名单是否命中（供上层做「加白即解封」联动）。
+    pub fn is_whitelisted(&self, ip: Ip) -> bool {
+        self.whitelist.contains(ip)
+    }
+
+    /// 受保护端口总数，用于面板展示。
+    pub fn protected_port_count(&self) -> usize {
+        self.tcp_mask.count() + self.web_mask.count() + self.udp_mask.count()
+    }
+
+    /// 判定单个数据包。
+    pub fn evaluate(&mut self, pkt: &PacketInfo) -> Outcome {
+        self.stats.packets = self.stats.packets.saturating_add(1);
+
+        if pkt.protocol == Protocol::Icmp {
+            return Outcome::Ignored {
+                reason: "icmp_unsupported",
+            };
+        }
+
+        let inbound = pkt.dst == self.local_ip;
+        let outbound = pkt.src == self.local_ip;
+        if !inbound && !outbound {
+            // SIO_RCVALL 会收到网段内所有流量，非本机流量直接忽略。
+            return Outcome::Ignored {
+                reason: "not_local_traffic",
+            };
+        }
+        if outbound && !self.count_outbound {
+            return Outcome::Ignored {
+                reason: "outbound_ignored",
+            };
+        }
+
+        let peer: Ip = if inbound { pkt.src } else { pkt.dst };
+        let service_port = if inbound { pkt.dst_port } else { pkt.src_port };
+
+        // ① 白名单最高优先级。
+        if self.whitelist.contains(peer) {
+            self.stats.whitelisted = self.stats.whitelisted.saturating_add(1);
+            return Outcome::Whitelisted;
+        }
+        // ② 黑名单立即封停。
+        if self.blacklist.contains(peer) {
+            self.stats.blacklist_hits = self.stats.blacklist_hits.saturating_add(1);
+            return Outcome::BlacklistBan;
+        }
+
+        // ③ 保护端口 + 阈值。TCP 必须由 SYN && !ACK 触发。
+        match pkt.protocol {
+            Protocol::Tcp => {
+                if !pkt.tcp_flags.is_connection_request() {
+                    return Outcome::Ignored {
+                        reason: "not_new_connection",
+                    };
+                }
+                // TCP 与 WEB 是两套独立配置，端口重合时两组**都要计数**，
+                // 任意一组超限即封停；都未超限时返回 TCP 组的结果作为代表。
+                let mut result = Outcome::Ignored {
+                    reason: "port_not_protected",
+                };
+                if self.tcp_mask.contains(service_port) {
+                    let key = TrackKey {
+                        ip: u32::from(peer),
+                        port: service_port,
+                        group: PortGroup::Tcp,
+                    };
+                    let out = self.record_and_judge(key, pkt.timestamp_ms);
+                    if out.should_ban() {
+                        return out;
+                    }
+                    result = out;
+                }
+                if self.web_mask.contains(service_port) {
+                    let web_key = TrackKey {
+                        ip: u32::from(peer),
+                        port: service_port,
+                        group: PortGroup::Web,
+                    };
+                    let out = self.record_and_judge_web(web_key, pkt.timestamp_ms);
+                    if out.should_ban() {
+                        return out;
+                    }
+                    if matches!(result, Outcome::Ignored { .. }) {
+                        result = out;
+                    }
+                }
+                result
+            }
+            Protocol::Udp => {
+                // UDP 无连接建立过程，每个报文都记一次访问（规范 4.3）。
+                if !self.udp_mask.contains(service_port) {
+                    return Outcome::Ignored {
+                        reason: "port_not_protected",
+                    };
+                }
+                let key = TrackKey {
+                    ip: u32::from(peer),
+                    port: service_port,
+                    group: PortGroup::Udp,
+                };
+                let window = self.udp_rule.window_ms();
+                let threshold = self.udp_rule.max_attempts;
+                let count = self.tracker.record(key, pkt.timestamp_ms, window);
+                self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
+                if count > threshold {
+                    self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
+                    Outcome::ThresholdBan {
+                        group: PortGroup::Udp,
+                        count,
+                        threshold,
+                    }
+                } else {
+                    Outcome::Tracking {
+                        group: PortGroup::Udp,
+                        count,
+                        threshold,
+                    }
+                }
+            }
+            Protocol::Icmp => Outcome::Ignored {
+                reason: "icmp_unsupported",
+            },
+        }
+    }
+
+    /// 记录 TCP 组事件并判定。
+    fn record_and_judge(&mut self, key: TrackKey, now_ms: u64) -> Outcome {
+        let window = self.tcp_rule.window_ms();
+        let threshold = self.tcp_rule.max_attempts;
+        let count = self.tracker.record(key, now_ms, window);
+        self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
+        if count > threshold {
+            self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
+            Outcome::ThresholdBan {
+                group: PortGroup::Tcp,
+                count,
+                threshold,
+            }
+        } else {
+            Outcome::Tracking {
+                group: PortGroup::Tcp,
+                count,
+                threshold,
+            }
+        }
+    }
+
+    /// 记录 WEB 组事件并判定。
+    fn record_and_judge_web(&mut self, key: TrackKey, now_ms: u64) -> Outcome {
+        let window = self.web_rule.window_ms();
+        let threshold = self.web_rule.max_attempts;
+        let count = self.tracker.record(key, now_ms, window);
+        self.stats.tracked_events = self.stats.tracked_events.saturating_add(1);
+        if count > threshold {
+            self.stats.threshold_hits = self.stats.threshold_hits.saturating_add(1);
+            Outcome::ThresholdBan {
+                group: PortGroup::Web,
+                count,
+                threshold,
+            }
+        } else {
+            Outcome::Tracking {
+                group: PortGroup::Web,
+                count,
+                threshold,
+            }
+        }
+    }
+
+    /// 顶点的当前连接快照，只保留最近 `ttl_ms` 内活跃的记录。
+    pub fn connection_rows(&self, now_ms: u64, ttl_ms: u64) -> Vec<ConnectionRow> {
+        let cutoff = now_ms.saturating_sub(ttl_ms);
+        let mut rows: Vec<ConnectionRow> = self
+            .tracker
+            .iter_entries()
+            .filter(|(_, e)| e.last_seen_ms >= cutoff)
+            .map(|(k, e)| ConnectionRow {
+                ip: crate::iprange::u32_to_ip(k.ip),
+                port: k.port,
+                group: k.group,
+                window_count: e.window_count(),
+                total_count: e.total_count,
+                first_seen_ms: e.first_seen_ms,
+                last_seen_ms: e.last_seen_ms,
+            })
+            .collect();
+        // 次数优先、时间其次，保证面板排序稳定。
+        rows.sort_by(|a, b| {
+            b.window_count
+                .cmp(&a.window_count)
+                .then_with(|| b.last_seen_ms.cmp(&a.last_seen_ms))
+        });
+        rows
+    }
+
+    /// 定期清理跟踪状态，防止长期运行内存增长。
+    pub fn prune(&mut self, now_ms: u64, retention_ms: u64) -> usize {
+        self.tracker.prune(now_ms, retention_ms)
+    }
+
+    /// 清空跟踪状态。
+    pub fn reset_tracking(&mut self) {
+        self.tracker.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ProtectionRule;
+
+    fn ip(s: &str) -> Ip {
+        s.parse().unwrap()
+    }
+
+    const LOCAL: &str = "192.168.1.10";
+    const PEER: &str = "203.0.113.9";
+
+    fn base_config() -> Config {
+        let mut c = Config::with_defaults();
+        c.protect.tcp = ProtectionRule {
+            ports: vec![3389],
+            window_seconds: 10,
+            max_attempts: 3,
+        };
+        c.protect.http = ProtectionRule {
+            ports: vec![80],
+            window_seconds: 10,
+            max_attempts: 5,
+        };
+        c.protect.udp = ProtectionRule {
+            ports: vec![53],
+            window_seconds: 10,
+            max_attempts: 2,
+        };
+        c
+    }
+
+    /// 构造一个「外部 → 本机受保护端口」的 TCP SYN 包。
+    fn syn_packet(src: &str, dst_port: u16, ts: u64) -> PacketInfo {
+        PacketInfo {
+            src: ip(src),
+            dst: ip(LOCAL),
+            src_port: 44444,
+            dst_port,
+            protocol: Protocol::Tcp,
+            tcp_flags: FLAG_SYN,
+            length: 40,
+            timestamp_ms: ts,
+        }
+    }
+
+    fn engine() -> RuleEngine {
+        RuleEngine::new(&base_config(), ip(LOCAL))
+    }
+
+    #[test]
+    fn 白名单永远放行() {
+        let mut cfg = base_config();
+        cfg.lists.whitelist = vec!["203.0.113.*".to_string()];
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        for i in 0..100 {
+            let out = e.evaluate(&syn_packet(PEER, 3389, i * 100));
+            assert_eq!(out, Outcome::Whitelisted);
+        }
+        assert_eq!(e.stats().threshold_hits, 0, "白名单不得被自动封停");
+    }
+
+    #[test]
+    fn 白名单优先于黑名单() {
+        let mut cfg = base_config();
+        cfg.lists.whitelist = vec!["203.0.113.9".to_string()];
+        cfg.lists.blacklist = vec!["203.0.113.9".to_string()];
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        assert_eq!(e.evaluate(&syn_packet(PEER, 3389, 1_000)), Outcome::Whitelisted);
+    }
+
+    #[test]
+    fn 黑名单立即封停不计数() {
+        let mut cfg = base_config();
+        cfg.lists.blacklist = vec!["203.0.113.0-203.0.113.255".to_string()];
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        assert_eq!(e.evaluate(&syn_packet(PEER, 3389, 1_000)), Outcome::BlacklistBan);
+        assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 阈值内只跟踪() {
+        let mut e = engine();
+        assert!(matches!(
+            e.evaluate(&syn_packet(PEER, 3389, 1_000)),
+            Outcome::Tracking { count: 1, threshold: 3, .. }
+        ));
+        assert!(matches!(
+            e.evaluate(&syn_packet(PEER, 3389, 2_000)),
+            Outcome::Tracking { count: 2, threshold: 3, .. }
+        ));
+        assert!(matches!(
+            e.evaluate(&syn_packet(PEER, 3389, 3_000)),
+            Outcome::Tracking { count: 3, threshold: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn 超阈值触发封停() {
+        let mut e = engine();
+        for i in 0..3u64 {
+            e.evaluate(&syn_packet(PEER, 3389, i * 1_000));
+        }
+        let out = e.evaluate(&syn_packet(PEER, 3389, 3_000));
+        match out {
+            Outcome::ThresholdBan { group, count, threshold } => {
+                assert_eq!(group, PortGroup::Tcp);
+                assert_eq!(count, 4);
+                assert_eq!(threshold, 3);
+            }
+            other => panic!("期望超阈值封停，实际={:?}", other),
+        }
+    }
+
+    #[test]
+    fn 窗口过期后计数归零() {
+        let mut e = engine();
+        e.evaluate(&syn_packet(PEER, 3389, 1_000));
+        e.evaluate(&syn_packet(PEER, 3389, 2_000));
+        // 推进 30 秒，10 秒窗口已全部滑出
+        let out = e.evaluate(&syn_packet(PEER, 3389, 32_000));
+        assert!(matches!(out, Outcome::Tracking { count: 1, .. }));
+    }
+
+    #[test]
+    fn 握手响应不算新连接() {
+        let mut e = engine();
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.tcp_flags = TcpFlags {
+            syn: true,
+            ack: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            e.evaluate(&pkt),
+            Outcome::Ignored {
+                reason: "not_new_connection"
+            }
+        );
+        assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 仅确认与结束标志不计入() {
+        let mut e = engine();
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.tcp_flags = TcpFlags {
+            ack: true,
+            fin: true,
+            ..Default::default()
+        };
+        assert!(matches!(e.evaluate(&pkt), Outcome::Ignored { .. }));
+        assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 非保护端口被忽略() {
+        let mut e = engine();
+        let out = e.evaluate(&syn_packet(PEER, 8080, 1_000));
+        assert_eq!(
+            out,
+            Outcome::Ignored {
+                reason: "port_not_protected"
+            }
+        );
+    }
+
+    #[test]
+    fn 非本机流量被忽略() {
+        let mut e = engine();
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.dst = ip("10.0.0.5");
+        pkt.src = ip("10.0.0.6");
+        assert_eq!(
+            e.evaluate(&pkt),
+            Outcome::Ignored {
+                reason: "not_local_traffic"
+            }
+        );
+    }
+
+    #[test]
+    fn 本机外连默认不计入() {
+        let mut e = engine();
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.src = ip(LOCAL);
+        pkt.dst = ip(PEER);
+        pkt.src_port = 3389;
+        pkt.dst_port = 55555;
+        assert_eq!(
+            e.evaluate(&pkt),
+            Outcome::Ignored {
+                reason: "outbound_ignored"
+            }
+        );
+    }
+
+    #[test]
+    fn 网页端口组使用独立阈值() {
+        let mut cfg = base_config();
+        cfg.protect.http.max_attempts = 2;
+        cfg.protect.tcp = ProtectionRule {
+            ports: vec![],
+            window_seconds: 10,
+            max_attempts: 99,
+        };
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        e.evaluate(&syn_packet(PEER, 80, 1_000));
+        e.evaluate(&syn_packet(PEER, 80, 1_100));
+        let out = e.evaluate(&syn_packet(PEER, 80, 1_200));
+        assert!(matches!(
+            out,
+            Outcome::ThresholdBan {
+                group: PortGroup::Web,
+                count: 3,
+                threshold: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn 同端口同时属于两组时两组独立计数() {
+        let mut cfg = base_config();
+        cfg.protect.tcp = ProtectionRule {
+            ports: vec![8080],
+            window_seconds: 10,
+            max_attempts: 99,
+        };
+        cfg.protect.http = ProtectionRule {
+            ports: vec![8080],
+            window_seconds: 10,
+            max_attempts: 2,
+        };
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        e.evaluate(&syn_packet(PEER, 8080, 1_000));
+        e.evaluate(&syn_packet(PEER, 8080, 1_100));
+        let out = e.evaluate(&syn_packet(PEER, 8080, 1_200));
+        // TCP 阈值 99 未到，WEB 阈值 2 已超
+        assert!(matches!(
+            out,
+            Outcome::ThresholdBan {
+                group: PortGroup::Web,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn 用户数据报每个报文都计数() {
+        let mut e = engine();
+        let pkt = PacketInfo {
+            src: ip(PEER),
+            dst: ip(LOCAL),
+            src_port: 40000,
+            dst_port: 53,
+            protocol: Protocol::Udp,
+            tcp_flags: TcpFlags::default(),
+            length: 60,
+            timestamp_ms: 1_000,
+        };
+        assert!(matches!(
+            e.evaluate(&pkt),
+            Outcome::Tracking {
+                group: PortGroup::Udp,
+                count: 1,
+                ..
+            }
+        ));
+        let pkt2 = PacketInfo {
+            timestamp_ms: 1_100,
+            ..pkt
+        };
+        e.evaluate(&pkt2);
+        let pkt3 = PacketInfo {
+            timestamp_ms: 1_200,
+            ..pkt
+        };
+        assert!(matches!(
+            e.evaluate(&pkt3),
+            Outcome::ThresholdBan {
+                group: PortGroup::Udp,
+                count: 3,
+                threshold: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn 网际控制报文被忽略() {
+        let mut e = engine();
+        let pkt = PacketInfo {
+            src: ip(PEER),
+            dst: ip(LOCAL),
+            src_port: 0,
+            dst_port: 0,
+            protocol: Protocol::Icmp,
+            tcp_flags: TcpFlags::default(),
+            length: 28,
+            timestamp_ms: 1_000,
+        };
+        assert!(matches!(e.evaluate(&pkt), Outcome::Ignored { .. }));
+    }
+
+    #[test]
+    fn 切换监听地址会清空跟踪状态() {
+        let mut e = engine();
+        e.evaluate(&syn_packet(PEER, 3389, 1_000));
+        assert_eq!(e.tracker.len(), 1);
+        e.set_local_ip(ip("10.0.0.1"));
+        assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 非法白名单不会清空既有规则() {
+        let mut cfg = base_config();
+        cfg.lists.whitelist = vec!["203.0.113.*".to_string()];
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        assert!(e.is_whitelisted(ip(PEER)));
+        // 灌入非法配置，旧的合法白名单必须保留
+        cfg.lists.whitelist = vec!["这不是IP".to_string()];
+        e.reload(&cfg);
+        assert!(e.is_whitelisted(ip(PEER)), "非法配置不得清空既有白名单");
+    }
+
+    #[test]
+    fn 并发多源互不干扰() {
+        let mut e = engine();
+        for i in 0..3u64 {
+            e.evaluate(&syn_packet("198.51.100.1", 3389, i * 100));
+            e.evaluate(&syn_packet("198.51.100.2", 3389, i * 100));
+        }
+        // 两个源各 3 次，都刚好等于阈值 3，尚未超限
+        assert_eq!(e.stats().threshold_hits, 0);
+        assert_eq!(e.tracker.len(), 2);
+        let rows = e.connection_rows(1_000, 60_000);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].window_count, 3);
+    }
+
+    #[test]
+    fn 连接快照按次数降序() {
+        let mut e = engine();
+        e.evaluate(&syn_packet("198.51.100.1", 3389, 1_000));
+        e.evaluate(&syn_packet("198.51.100.2", 3389, 1_000));
+        e.evaluate(&syn_packet("198.51.100.2", 3389, 1_100));
+        let rows = e.connection_rows(1_200, 60_000);
+        assert_eq!(rows[0].ip, ip("198.51.100.2"));
+        assert_eq!(rows[0].window_count, 2);
+    }
+
+    #[test]
+    fn 快照过滤过期行() {
+        let mut e = engine();
+        e.evaluate(&syn_packet(PEER, 3389, 1_000));
+        assert_eq!(e.connection_rows(1_000, 60_000).len(), 1);
+        assert_eq!(e.connection_rows(999_999, 60_000).len(), 0);
+    }
+
+    #[test]
+    fn 保护端口计数正确() {
+        let e = engine();
+        // tcp 1 个 + web 1 个 + udp 1 个
+        assert_eq!(e.protected_port_count(), 3);
+    }
+
+    #[test]
+    fn 非法包长度不影响判定() {
+        let mut e = engine();
+        let mut pkt = syn_packet(PEER, 3389, 1_000);
+        pkt.length = 0;
+        assert!(matches!(e.evaluate(&pkt), Outcome::Tracking { .. }));
+    }
+}
