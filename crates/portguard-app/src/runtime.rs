@@ -317,9 +317,12 @@ impl RuntimeHandle {
         self.started_at_ms
     }
 
-    /// 数据目录。
+    /// 数据目录（配置、封停记录、日志所在的根目录）。
+    ///
+    /// 注意不是 `AppPaths::data_dir()`——那是给 IP 地理位置库预留的 `data/` 子目录，
+    /// 拿它当「数据目录」展示会让用户去空目录里找 `config.toml`。
     pub fn data_dir(&self) -> String {
-        self.paths.data_dir().display().to_string()
+        self.paths.root().display().to_string()
     }
 
     /// 把动作交给执行线程。

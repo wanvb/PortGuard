@@ -144,7 +144,8 @@ fn run() -> i32 {
     let meta = PanelMeta {
         version: cli::VERSION.to_string(),
         log_file: paths.log_file().display().to_string(),
-        data_dir: paths.data_dir().display().to_string(),
+        // 面板展示的是配置/封停/日志所在的根目录，不是给 IP 库预留的 data/ 子目录
+        data_dir: paths.root().display().to_string(),
         started_at_ms: rt.started_at_ms(),
     };
     let mut server = if opts.panel && cfg.panel.enabled {
@@ -195,11 +196,7 @@ fn run() -> i32 {
         }
     }
 
-    print_banner(
-        &panel_url,
-        &paths.data_dir().display().to_string(),
-        admin,
-    );
+    print_banner(&panel_url, &paths.root().display().to_string(), admin);
 
     // ---- 主循环 ----
     let mut last_refresh = Instant::now() - UI_REFRESH;
