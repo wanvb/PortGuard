@@ -26,4 +26,6 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     # WNDCLASSW 的背景画刷字段来自 Gdi
     "Win32_Graphics_Gdi",
+    # 控制台：SetConsoleCtrlHandler / SetConsoleOutputCP
+    "Win32_System_Console",
 ] }

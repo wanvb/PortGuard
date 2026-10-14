@@ -44,6 +44,15 @@ impl AdapterInfo {
         !self.ip.is_unspecified() && !self.ip.is_loopback()
     }
 
+    /// 是否属于 `169.254.0.0/16`（APIPA 自动私有地址）。
+    ///
+    /// 网卡没拿到 DHCP 时 Windows 会临时分配这类地址，此时网卡上没有真实流量，
+    /// 自动选网卡必须把它排到最后，否则工具会选一张「空网卡」白等。
+    pub fn is_link_local(&self) -> bool {
+        let o = self.ip.octets();
+        o[0] == 169 && o[1] == 254
+    }
+
     /// 根据前缀长度算出点分十进制掩码。
     pub fn mask_from_prefix(prefix_len: u8) -> String {
         let bits = prefix_len.min(32) as u32;
@@ -254,6 +263,26 @@ mod tests {
         assert!(!mk("0.0.0.0").is_usable());
         assert!(!mk("127.0.0.1").is_usable());
         assert!(mk("192.168.1.10").is_usable());
+    }
+
+    #[test]
+    fn 自动私有地址被识别() {
+        let mk = |s: &str| AdapterInfo {
+            ip: s.parse().unwrap(),
+            prefix_len: 16,
+            mask: "255.255.0.0".into(),
+            description: "test".into(),
+            friendly_name: "test".into(),
+            is_virtual: false,
+            is_up: true,
+            if_index: 1,
+        };
+        assert!(mk("169.254.181.253").is_link_local());
+        // 技术上仍可用于抓包，只是优先级最低
+        assert!(mk("169.254.181.253").is_usable());
+        assert!(!mk("192.168.1.10").is_link_local());
+        assert!(!mk("169.255.1.1").is_link_local());
+        assert!(!mk("170.254.1.1").is_link_local());
     }
 
     #[test]

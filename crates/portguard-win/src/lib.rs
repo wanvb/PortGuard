@@ -18,6 +18,7 @@
 pub mod admin;
 pub mod autostart;
 pub mod browser;
+pub mod console;
 pub mod single_instance;
 pub mod timezone;
 pub mod tray;
@@ -27,5 +28,12 @@ pub mod winerr;
 pub use admin::is_elevated;
 pub use autostart::Autostart;
 pub use browser::{open_url, panel_url};
+pub use console::{enable_utf8_output, exit_requested, install_exit_handler};
 pub use single_instance::SingleInstance;
 pub use tray::{Tray, TrayAction, WM_TRAYICON};
+
+/// 托盘图标（32x32 32bpp ICO）。
+///
+/// 由 `tools/gen_tray_icon.py` 生成后编译进二进制，
+/// 部署时不需要附带任何图标文件。
+pub const TRAY_ICON: &[u8] = include_bytes!("../assets/tray.ico");

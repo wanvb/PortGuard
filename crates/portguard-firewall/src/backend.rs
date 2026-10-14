@@ -18,6 +18,10 @@ pub const RULE_ICMP_V6: &str = "PortGuard-Block-ICMPv6";
 /// 本程序创建的**非封停类**规则名清单，用于清理与自检。
 pub const OWN_SYSTEM_RULES: &[&str] = &[RULE_RISKY_TCP, RULE_RISKY_UDP, RULE_ICMP_V4, RULE_ICMP_V6];
 
+/// 「危险端口保护」覆盖的端口：Windows 文件共享与旧式 NetBIOS 相关服务，
+/// 长期是勒索软件横向移动的首选入口。
+pub const RISKY_PORTS: &[u16] = &[135, 137, 138, 139, 445];
+
 /// 本程序所有防火墙规则的统一前缀。
 ///
 /// 比 `portguard_core::ban::RULE_PREFIX` 更宽：后者只标识封停规则，

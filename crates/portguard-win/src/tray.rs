@@ -427,4 +427,20 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len(), "菜单项 ID 不可重复");
     }
+
+    /// 内嵌图标若被替换成坏文件，托盘会静默退回系统默认图标；
+    /// 这里直接从字节层面校验 ICO 头，让问题在构建期就暴露。
+    #[test]
+    fn 内嵌图标是合法ico() {
+        let data = crate::TRAY_ICON;
+        assert!(data.len() > 64, "图标文件过小：{}", data.len());
+        assert_eq!(&data[0..4], &[0, 0, 1, 0], "ICONDIR 头不合法");
+        assert_eq!(data[4], 1, "图标数量应为 1");
+        assert_eq!(data[6], 32, "图标宽应为 32");
+        assert_eq!(data[7], 32, "图标高应为 32");
+        assert_eq!(data[12], 32, "位深应为 32");
+        // 声明的图像长度必须与实际剩余字节一致，否则 LoadImageW 会读取越界
+        let declared = u32::from_le_bytes([data[14], data[15], data[16], data[17]]) as usize;
+        assert_eq!(declared, data.len() - 22, "图像长度字段与实际不符");
+    }
 }
