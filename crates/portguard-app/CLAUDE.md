@@ -11,7 +11,7 @@
 - `runtime::RuntimeHandle`：`new(config, logger, firewall, paths)`、`read(f)`、`config()`、`started_at_ms()`、`data_dir()`、`enqueue(Action) -> bool`、`persist_bans()`、`start() -> Result<()>`、`stop()`、`select_adapter(ip) -> Result<()>`、`apply_config(cfg) -> Result<()>`、`logs(limit)`。
 - `runtime::Action`：`Ban(BanRequest)` / `Unban(Ip)` / `SyncSystemRules`；`BanRequest{ip, reason, protocol, service_port, remote_port, attempt_count, permanent_override}`。
 - `runtime::Inner`：共享运行状态（config / engine / bans / events / capture / local_ip 等），同一把锁下保证快照一致。
-- `controller::Controller`：`new(rt, paths, logger)`，实现 `PortGuardApi`（status / connections / bans / config / save_config / start / stop / ban_ip / unban_ip / 名单增删 / logs / events / adapters / select_adapter / set_protection / data_dir）。
+- `controller::Controller`：`new(rt, paths, logger)`，实现 `PortGuardApi`（status / connections / bans / config / save_config / start / stop / ban_ip / unban_ip / 名单增删 / logs / events / adapters / select_adapter / set_protection / data_dir）；额外持有 `RwLock<GeoLookup>`（地理位置展示，`reload_geo` / `location_of` / `with_geo`）。
 - `main`：`fn main()`（无参入口，`std::process::exit(run())`）。
 
 ## 关键约束
@@ -25,12 +25,14 @@
 - **端口顺延**：面板端口被占用时最多向后试 `PORT_FALLBACK_TRIES` 个端口，保证程序总能起来。
 - **非管理员不启动保护**（规范 23）：非管理员时跳过自动开始保护并打印明确指引，而不是先启动再失败。
 - **服务模式**（`--service`）：由计划任务以 SYSTEM 在会话 0 拉起，既不建托盘也不自动打开浏览器（`should_open_browser` 三条件之一）。
+- **地理位置在运行期锁之外查询**（规范 22）：`connections()` / `bans()` 先在锁内取快照、释放锁，再用 `location_of` 逐行填充 `location`；抓包线程与判定路径完全不接触 `portguard-geo`。
+- **地理位置库可在运行期重载**：`save_config` 检测到 `geo` 段变化时立即 `reload_geo`，避免「改了设置但没生效」的静默失效；`geo_candidates` 按「数据目录 → 程序目录」给出候选路径。
 
 ## 测试
 - 位置：内联 `#[cfg(test)] mod tests`（`cli.rs` / `main.rs` / `controller.rs` / `runtime.rs`）。
 - 关键用例：`默认选项符合预期` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长`。
-- 测试数量：23 个 `#[test]`（cli 6、main 3、controller 8、runtime 6）；`main` 侧含 `自动打开浏览器受三条件约束`。
+- 测试数量：26 个 `#[test]`（cli 6、main 3、controller 11、runtime 6）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
 
 ## 依赖关系
-- 依赖：`portguard-core`、`portguard-packet`、`portguard-firewall`、`portguard-storage`、`portguard-win`、`portguard-rdp`、`portguard-web`，以及 `serde` / `serde_json` / `thiserror` / `windows`。
+- 依赖：`portguard-core`、`portguard-packet`、`portguard-firewall`、`portguard-storage`、`portguard-win`、`portguard-rdp`、`portguard-geo`、`portguard-web`，以及 `serde` / `serde_json` / `thiserror` / `windows`。
 - 被依赖：无（workspace 顶层可执行 crate）。

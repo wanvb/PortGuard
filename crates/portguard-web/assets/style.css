@@ -467,6 +467,11 @@ tbody tr.whitelisted {
   color: var(--muted);
 }
 
+/* 需要用户处理的状态说明（如地理位置库未就位） */
+.muted.warn {
+  color: var(--warn);
+}
+
 .dim {
   color: var(--text-dim);
 }

@@ -17,6 +17,7 @@ portguard-storage = { path = "crates/portguard-storage" }
 portguard-win = { path = "crates/portguard-win" }
 portguard-rdp = { path = "crates/portguard-rdp" }
 portguard-web = { path = "crates/portguard-web" }
+portguard-geo = { path = "crates/portguard-geo" }
 
 # ---- 第三方（版本已按 Rust 1.77.2 的 MSRV 锁定，勿随意放宽）----
 serde = { version = "=1.0.197", features = ["derive"] }

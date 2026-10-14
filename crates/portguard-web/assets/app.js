@@ -201,6 +201,14 @@ function renderStatus() {
   $("btn-start").disabled = s.running;
   $("btn-stop").disabled = !s.running;
 
+  // 地理位置库状态：加载成功给出路径，否则给出原因与放置位置
+  const geoTip = $("geo-status");
+  if (geoTip) {
+    const text = s.geo_status || "";
+    geoTip.textContent = s.geo_ready ? `已加载：${text}` : text;
+    geoTip.className = s.geo_ready ? "muted" : "muted warn";
+  }
+
   // 权限不足时给出明确后果提示，而不是等到封停失败
   if (!s.admin && !state.adminWarned) {
     state.adminWarned = true;
@@ -282,13 +290,17 @@ function renderConnections() {
   const keyword = ($("filter-connections").value || "").trim().toLowerCase();
   const rows = state.connections.filter((c) => {
     if (!keyword) return true;
-    return c.ip.toLowerCase().includes(keyword) || String(c.service_port).includes(keyword);
+    return (
+      c.ip.toLowerCase().includes(keyword) ||
+      (c.location || "").toLowerCase().includes(keyword) ||
+      String(c.service_port).includes(keyword)
+    );
   });
 
   if (!rows.length) {
     body.appendChild(
       el("tr", {}, [
-        el("td", { colspan: "9" }, [
+        el("td", { colspan: "10" }, [
           el("div", { class: "empty" }, [
             el("strong", { text: keyword ? "没有匹配的记录" : "当前没有跟踪中的连接" }),
             el("span", {
@@ -307,6 +319,7 @@ function renderConnections() {
 
     const row = el("tr", { class: c.whitelisted ? "whitelisted" : "" });
     row.appendChild(el("td", { class: "mono", text: c.ip }));
+    row.appendChild(el("td", { class: "muted", text: c.location || "未知" }));
     row.appendChild(el("td", {}, [el("span", { class: "badge group", text: c.group })]));
     row.appendChild(el("td", { class: "mono", text: String(c.service_port) }));
     row.appendChild(
@@ -363,7 +376,7 @@ function renderBans() {
   if (!state.bans.length) {
     body.appendChild(
       el("tr", {}, [
-        el("td", { colspan: "9" }, [
+        el("td", { colspan: "10" }, [
           el("div", { class: "empty" }, [
             el("strong", { text: "封停列表为空" }),
             el("span", { text: "没有地址被拦截" }),
@@ -377,6 +390,7 @@ function renderBans() {
   for (const b of state.bans) {
     const row = el("tr", { class: "banned" });
     row.appendChild(el("td", { class: "mono", text: b.ip }));
+    row.appendChild(el("td", { class: "muted", text: b.location || "未知" }));
     row.appendChild(el("td", { text: b.reason_label || b.reason }));
     row.appendChild(el("td", { class: "mono", text: b.protocol || "-" }));
     row.appendChild(
@@ -449,6 +463,8 @@ function renderSettings() {
   $("cfg-rdp-list").value = (cfg.rdp.client_whitelist || []).join("\n");
   $("cfg-log-level").value = cfg.logging.level;
   $("cfg-log-lines").value = cfg.logging.max_memory_lines;
+  $("cfg-geo-enabled").checked = cfg.geo.enabled;
+  $("cfg-geo-db").value = cfg.geo.db;
 
   // 保护端口三组
   const box = $("protect-rows");
@@ -547,6 +563,8 @@ function collectSettings() {
   base.rdp.client_whitelist = splitLines($("cfg-rdp-list").value);
   base.logging.level = $("cfg-log-level").value;
   base.logging.max_memory_lines = Number($("cfg-log-lines").value) || 2000;
+  base.geo.enabled = $("cfg-geo-enabled").checked;
+  base.geo.db = $("cfg-geo-db").value.trim();
 
   const netAdapter = $("cfg-adapter").value;
   base.network.adapter = netAdapter;

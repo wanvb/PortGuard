@@ -5,7 +5,7 @@
 - `assets`：`include_str!` 把 `index.html` / `app.js` / `style.css` 打进 exe，实现单文件部署。
 - `router`：输入「方法 + 路径 + 查询串 + 请求体」输出 `Reply` 的纯函数，不接触 socket，可用 Mock API 完整单测。
 - `server`：`WebServer` 起多线程服务循环并执行安全校验（Host / Origin / 请求体上限）。
-- 不做什么：只通过 `portguard_core::api::PortGuardApi` 与业务交互，不认识抓包与防火墙内部结构（规范 18 UI/Core 解耦）；不含登录鉴权。
+- 不做什么：只通过 `portguard_core::api::PortGuardApi` 与业务交互，不认识抓包、防火墙与地理位置库内部结构（规范 18 UI/Core 解耦）；不含登录鉴权。
 
 ## 对外接口
 - `DEFAULT_BIND: &str`：`"127.0.0.1:18080"`。
@@ -22,7 +22,8 @@
 - **Host 校验**：`host_allowed` 只放行 `bind` / `127.0.0.1` / `localhost` / `[::1]` 且端口必须一致，阻断 DNS rebinding；缺失 Host 或非本机 Host 一律 403 并写日志。
 - **Origin 校验**：仅对变更类（POST）请求，`origin_is_local` 比较主机与端口，拒绝跨站表单提交。
 - **请求体上限**：`MAX_BODY = 1 MiB`，超限或未声明长度时用 `take` 限制实际读取量，防御超大请求撑爆内存；错误以 `{"error":"中文说明"}` 返回。
-- **前端数据必须经 textContent 写入**：`app.js` 禁止用 `innerHTML` 拼接来自接口的数据，防 XSS（`assets.rs` 测试守住该约定）。
+- **前端数据必须经 textContent 写入**：`app.js` 禁止用 `innerHTML` 拼接来自接口的数据，防 XSS（`assets.rs` 测试守住该约定）；地理位置文本同样按外部数据对待。
+- **地理位置列是纯展示**：`ConnectionView.location` / `BanView.location` 只渲染，不参与筛选以外的任何逻辑；筛选框对 `location` 做子串匹配便于按地区查找。
 - **资源内嵌单 exe**：前端经 `include_str!` 进二进制，改前端必须重编译；静态资源响应带 `no-cache`，避免升级后浏览器仍用旧前端。
 - **参数错误返回 400、服务端问题返回 500**：`map_error` 将 `InvalidIpRule` / `Config` 归为 400；`limit` 参数按区间夹取，未知接口 404。
 - **路由层是纯函数**：不在其中做阻塞 I/O；响应头附加失败只跳过该可选头，不丢弃已生成的数据。

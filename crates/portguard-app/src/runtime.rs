@@ -219,6 +219,8 @@ impl Inner {
                     threshold: rule.max_attempts,
                     state: state.to_string(),
                     whitelisted,
+                    // 地理位置由控制面板层按需填充：抓包线程不做与判定无关的查询（规范 22）
+                    location: String::new(),
                 }
             })
             .collect()

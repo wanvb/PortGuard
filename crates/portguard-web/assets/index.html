@@ -127,7 +127,7 @@
                 <input
                   type="text"
                   id="filter-connections"
-                  placeholder="筛选 IP 或端口"
+                  placeholder="筛选 IP / 地理位置 / 端口"
                   style="width: 190px"
                 />
               </div>
@@ -137,6 +137,7 @@
                 <thead>
                   <tr>
                     <th>来源 IP</th>
+                    <th>地理位置</th>
                     <th>分组</th>
                     <th>服务端口</th>
                     <th>窗口次数 / 阈值</th>
@@ -177,6 +178,7 @@
                 <thead>
                   <tr>
                     <th>IP</th>
+                    <th>地理位置</th>
                     <th>原因</th>
                     <th>协议</th>
                     <th>端口</th>
@@ -309,6 +311,29 @@
                   <input type="number" id="cfg-log-lines" min="100" step="100" />
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">
+                地理位置<small>只用于展示来源 IP 归属，不参与封停判定</small>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="field">
+                  <label class="chip" style="cursor: pointer">
+                    <input type="checkbox" id="cfg-geo-enabled" style="width: auto" />
+                    展示来源 IP 的地理位置
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="cfg-geo-db">数据库文件名（相对路径依次找 data/、程序目录、当前目录）</label>
+                  <input type="text" id="cfg-geo-db" placeholder="ip2region_v4.xdb" />
+                </div>
+              </div>
+              <p class="muted" id="geo-status" style="margin: 12px 0 0"></p>
             </div>
           </div>
 

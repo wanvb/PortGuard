@@ -11,13 +11,13 @@
 | 模块 | pub 类型 / 关键函数 | 说明 |
 |------|------|------|
 | `model` | `Ip`（= `Ipv4Addr`）、`Protocol`、`TrafficDirection`、`PortGroup`、`TcpFlags`、`PacketInfo`、`BanReason`、`BanRecord`、`Statistics` | 领域数据结构与 `Display`/`label`/`as_str` 辅助 |
-| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/validate` |
+| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/validate`；`GeoConfig{enabled, db}` 默认开启、文件名可回退 |
 | `iprange` | `IpRange`、`IpSet`、`parse_ipv4`、`u32_to_ip` | 支持单 IP / 区间 / 末段通配 / CIDR / 多段通配；`IpSet::from_rules` 任一条非法即整体失败 |
 | `tracker` | `TrackKey`、`TrackEntry`、`ConnectionTracker` | `record` 返回当前窗口计数；`peek_count`、`prune`、`remove_ip`、`iter_entries` |
 | `ban` | `RULE_PREFIX`、`ban_rule_name`、`is_own_rule`、`BanManager` | `make_record`、`ban`、`unban`、`take_expired`、`restore`、`snapshot` |
 | `engine` | `RuleEngine`、`Outcome`、`EngineStats`、`ConnectionRow`、`FLAG_SYN` | `new`、`reload`、`set_local_ip`、`evaluate`、`connection_rows`、`prune`、`protected_port_count` |
 | `logging` | `Level`、`LogLine`、`LogBuffer` | `push`、`tail`、`render` |
-| `api` | `PortGuardApi`（trait）、`StatusView`、`ConnectionView`、`BanView`、`AdapterView`、`EventView`、`BanSource`、`ProtectionSwitch`、`protocol_label`、`reason_label` | 表现层唯一依赖面，全部方法必须快速返回 |
+| `api` | `PortGuardApi`（trait）、`StatusView`、`ConnectionView`、`BanView`、`AdapterView`、`EventView`、`BanSource`、`ProtectionSwitch`、`protocol_label`、`reason_label` | 表现层唯一依赖面，全部方法必须快速返回；`StatusView` 含 `geo_ready` / `geo_status`，`ConnectionView` / `BanView` 含 `location`（纯展示，规范 22） |
 | `error` | `AppError`、`Result<T>` | 全项目统一错误类型 |
 | `time` | `now_ms`、`format_ms`、`format_ms_with_offset`、`DEFAULT_UTC_OFFSET_MINUTES` | 纯整数民用历法换算，不引入 chrono |
 | 顶层 | `VERSION`（取自 `CARGO_PKG_VERSION`） | — |
@@ -29,15 +29,16 @@
 - 白名单优先最高，任何路径（threshold / blacklist / manual / restore）都不得封停白名单 IP（规范 26.2）；`BanManager::ban` 命中白名单必须返回 `Err`，不得假装成功。
 - 一切封停必须经 `BanManager`，UI 与引擎不得直接操作封停 Map（规范 7）。
 - 防火墙规则归属靠 `RULE_PREFIX = "PortGuard-Ban-"` 前缀识别；`is_own_rule` 用于清理时精确筛选，绝不得按 IP 无条件删除系统或第三方规则（规范 8.4）。
-- `Config::default()` 与 `Config::with_defaults()` 必须同源：`#[serde(default)]` 在局部配置或旧版升级缺失字段时走的即是此默认值，若给空端口会静默失去保护能力。
+- `Config::default()` 与 `Config::with_defaults()` 必须同源：`#[serde(default)]` 在局部配置或旧配置文件缺失字段时走的即是此默认值，若给空端口会静默失去保护能力。
+- `GeoConfig` 只控制「是否展示地理位置」与「库文件名」，**不得**参与任何判定；库文件缺失时程序必须照常工作（规范 22）。旧版数据文件（`config.dat` / `BanData.bin`）已永久放弃，不得在配置中留兼容字段或别名。
 - IP 匹配比较阶段统一用 `u32`，禁止逐包做字符串切割（规范 21）；`IpSet::from_rules` 任一条非法即整体失败，避免静默丢规则。
 - 时间不得用 `SystemTime` 直接参与逻辑，一律以调用方注入的 `now_ms` 表达，保证引擎与跟踪器可单测。
 
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。
-- 分布：`ban.rs` 11、`config.rs` 9、`engine.rs` 22、`iprange.rs` 11、`logging.rs` 5、`time.rs` 5、`tracker.rs` 10。
-- 合计 `#[test]`：73 个。
+- 分布：`ban.rs` 11、`config.rs` 10、`engine.rs` 22、`iprange.rs` 11、`logging.rs` 5、`time.rs` 5、`tracker.rs` 10。
+- 合计 `#[test]`：74 个。
 - 关键用例：
   - `ban`：白名单地址手动封停同样被拒绝、永久封停不会被临时封停降级、恢复时丢弃白名单记录并可用到期回收清理防火墙、规则名前缀可识别归属。
   - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除。

@@ -37,6 +37,7 @@
 | `portguard-storage` | `config.toml` / `bans.json` 读写、日志落盘、路径解析 | `crates/portguard-storage/CLAUDE.md` |
 | `portguard-rdp` | RDP 客户端计算机名保护（会话枚举、策略判定） | `crates/portguard-rdp/CLAUDE.md` |
 | `portguard-win` | Win32 系统集成：权限、单实例、托盘、时区、浏览器、自启动、控制台 | `crates/portguard-win/CLAUDE.md` |
+| `portguard-geo` | IP 地理位置查询（ip2region xdb v3），**只用于展示** | `crates/portguard-geo/CLAUDE.md` |
 | `portguard-web` | 内嵌 Web 面板：资源内嵌、纯函数路由、HTTP 服务与安全校验 | `crates/portguard-web/CLAUDE.md` |
 | `portguard-app` | 主程序：启动编排、运行时回路、`PortGuardApi` 实现 | `crates/portguard-app/CLAUDE.md` |
 
@@ -50,6 +51,8 @@
 - 防火墙操作失败时不得假装成功——必须上报错误、记录日志并显示差异
 - 抓包线程只做「锁内判定 + 入队」，不得执行 netsh 调用或磁盘写入
 - 面板无口令，安全完全依赖「仅监听回环 + Host 校验 + Origin 校验」，不得为调试关闭
+- IP 地理位置只用于展示，绝不参与封停判定；查询失败显示「未知」，不得影响判定（规范 22）
+- 旧版数据文件（`config.dat` / `BanData.bin` / `PortGuard.txt`）已永久放弃，不得为其编写解析器或兼容分支
 - Git 提交信息需有意义（feat/fix/test 前缀；禁止 "update"/"test"/"fix"/"aaa"/"final"）
 
 ## 文档索引

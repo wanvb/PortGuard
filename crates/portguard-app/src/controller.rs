@@ -4,7 +4,8 @@
 //! 把配置变更落到磁盘。所有方法都保证快速返回（规范 44）：
 //! 慢操作一律交给 `runtime` 的执行线程。
 
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use portguard_core::api::{
     protocol_label, AdapterView, BanView, ConnectionView, EventView, PortGuardApi,
@@ -16,6 +17,7 @@ use portguard_core::iprange::{parse_ipv4, IpSet};
 use portguard_core::logging::LogLine;
 use portguard_core::model::{BanReason, Ip, Statistics};
 use portguard_core::time::now_ms;
+use portguard_geo::GeoLookup;
 use portguard_storage::{AppPaths, ConfigStore, Logger};
 
 use crate::runtime::{Action, BanRequest, RuntimeHandle};
@@ -25,15 +27,84 @@ pub struct Controller {
     rt: Arc<RuntimeHandle>,
     store: ConfigStore,
     logger: Arc<Logger>,
+    /// 数据目录与程序目录，用于定位地理位置库。
+    paths: AppPaths,
+    /// 地理位置库。只服务于展示，**绝不参与封停判定**（规范 22），
+    /// 因此加锁访问也不与判定路径产生任何耦合。
+    geo: RwLock<GeoLookup>,
+}
+
+/// 地理位置库的候选路径。
+///
+/// 顺序：绝对路径（用户显式指定）→ 数据目录 `data/` → 程序目录 → 当前工作目录。
+/// 前三者是部署形态；工作目录只作末位兜底，让「在资料目录里直接运行
+/// `target/release/PortGuard.exe`」也能找到库文件，且因排在最后，
+/// 永远不会覆盖前面几处的同名文件。
+fn geo_candidates(paths: &AppPaths, db: &str) -> Vec<PathBuf> {
+    let name = Path::new(db);
+    if name.is_absolute() {
+        return vec![name.to_path_buf()];
+    }
+    let mut candidates = vec![paths.data_dir().join(name), paths.root().join(name)];
+    if let Ok(cwd) = std::env::current_dir() {
+        let path = cwd.join(name);
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    candidates
+}
+
+/// 把地理位置库状态写进日志。
+///
+/// 库缺失不算错误（规范 22：只影响展示），但必须让用户知道文件该放哪，
+/// 否则面板上的一片「未知」会被当成程序故障。
+fn report_geo(logger: &Logger, lookup: &GeoLookup) {
+    if lookup.ready() {
+        logger.info(format!("地理位置库已加载：{}", lookup.status()));
+    } else {
+        logger.warn(format!("地理位置不可用：{}", lookup.status()));
+    }
 }
 
 impl Controller {
     pub fn new(rt: Arc<RuntimeHandle>, paths: AppPaths, logger: Arc<Logger>) -> Controller {
+        let cfg = rt.config();
+        let geo = GeoLookup::load(cfg.geo.enabled, &geo_candidates(&paths, &cfg.geo.db));
+        report_geo(&logger, &geo);
         Controller {
             rt,
             store: ConfigStore::new(paths.config_file()),
             logger,
+            paths,
+            geo: RwLock::new(geo),
         }
+    }
+
+    /// 以读锁访问地理位置库；锁中毒时沿用内部数据，不阻断面板。
+    fn with_geo<T>(&self, f: impl FnOnce(&GeoLookup) -> T) -> T {
+        match self.geo.read() {
+            Ok(guard) => f(&guard),
+            Err(poisoned) => f(&poisoned.into_inner()),
+        }
+    }
+
+    /// 按新配置重新加载地理位置库（开启/关闭、换库路径都要真的生效）。
+    fn reload_geo(&self, cfg: &Config) {
+        let lookup = GeoLookup::load(cfg.geo.enabled, &geo_candidates(&self.paths, &cfg.geo.db));
+        report_geo(&self.logger, &lookup);
+        let mut guard = match self.geo.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = lookup;
+    }
+
+    /// 取一个 IP 的展示用地理位置。
+    ///
+    /// 在运行期锁之外调用：地理位置查询与判定无关，不该占用抓包与执行线程的锁。
+    fn location_of(&self, ip: &str) -> String {
+        self.with_geo(|geo| geo.describe(ip))
     }
 
     /// 校验、落盘并应用配置。落盘失败则内存状态保持不变。
@@ -87,17 +158,24 @@ impl PortGuardApi for Controller {
                 block_icmp: cfg.system.block_icmp,
                 autostart: cfg.system.autostart,
                 rdp_enabled: cfg.rdp.enabled,
+                geo_ready: self.with_geo(|geo| geo.ready()),
+                geo_status: self.with_geo(|geo| geo.status().to_string()),
             }
         })
     }
 
     fn connections(&self) -> Vec<ConnectionView> {
-        self.rt.read(|inner| inner.connection_rows())
+        let mut rows = self.rt.read(|inner| inner.connection_rows());
+        for row in rows.iter_mut() {
+            let location = self.location_of(&row.ip);
+            row.location = location;
+        }
+        rows
     }
 
     fn bans(&self) -> Vec<BanView> {
         let now = now_ms();
-        self.rt.read(|inner| {
+        let mut rows: Vec<BanView> = self.rt.read(|inner| {
             let mut rows: Vec<BanView> = inner
                 .bans
                 .snapshot()
@@ -115,12 +193,19 @@ impl PortGuardApi for Controller {
                     permanent: r.permanent,
                     remaining_seconds: r.remaining_seconds(now),
                     rule_name: r.rule_name.clone(),
+                    location: String::new(),
                 })
                 .collect();
             // 最新的排在最前
             rows.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
             rows
-        })
+        });
+
+        for row in rows.iter_mut() {
+            let location = self.location_of(&row.ip);
+            row.location = location;
+        }
+        rows
     }
 
     fn config(&self) -> Config {
@@ -128,12 +213,17 @@ impl PortGuardApi for Controller {
     }
 
     fn save_config(&self, cfg: Config) -> Result<Config> {
+        let before = self.rt.config();
         // 网卡变更要真正重启抓包，失败必须让用户看到
-        let current = self.rt.config().network.adapter;
-        if current != cfg.network.adapter && !cfg.network.adapter.trim().is_empty() {
+        if before.network.adapter != cfg.network.adapter && !cfg.network.adapter.trim().is_empty() {
             self.rt.select_adapter(cfg.network.adapter.trim())?;
         }
-        self.commit(cfg)
+        let saved = self.commit(cfg)?;
+        // 地理位置库的开关与路径改了要立即生效，否则用户会以为设置没保存成功
+        if saved.geo != before.geo {
+            self.reload_geo(&saved);
+        }
+        Ok(saved)
     }
 
     fn start(&self) -> Result<()> {
@@ -456,5 +546,59 @@ mod tests {
         let (c, _) = controller();
         assert!(c.select_adapter("999.1.1.1").is_err());
         assert!(c.config().network.adapter.is_empty());
+    }
+
+    #[test]
+    fn 地理位置库候选路径优先数据目录() {
+        let paths = AppPaths::with_root("D:/PortGuard");
+        let list = geo_candidates(&paths, "ip2region_v4.xdb");
+        assert!(list.len() >= 2, "至少要有数据目录与程序目录两个候选");
+        assert!(list[0].ends_with(Path::new("data").join("ip2region_v4.xdb")));
+        assert!(list[1].ends_with("ip2region_v4.xdb"));
+        assert!(
+            list[2..].iter().all(|p| p.ends_with("ip2region_v4.xdb")),
+            "兜底候选同样指向同名文件：{:?}",
+            list
+        );
+
+        // 用户写绝对路径时不再拼接，避免出现 data/D:/xxx 这种荒唐结果
+        let abs = geo_candidates(&paths, "D:/elsewhere/ip.db");
+        assert_eq!(abs.len(), 1);
+    }
+
+    #[test]
+    fn 数据库缺失时地理位置恒为未知() {
+        let (c, _) = controller();
+        assert!(!c.status().geo_ready);
+        assert_eq!(c.location_of("8.8.8.8"), "未知");
+        assert_eq!(c.location_of("不是IP"), "未知");
+    }
+
+    #[test]
+    fn 保存配置后地理位置库立即重载() {
+        // 数据库不随源码分发，缺失时跳过（不影响 CI）
+        let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ip2region_v4.xdb");
+        if !real.is_file() {
+            return;
+        }
+        let (c, paths) = controller();
+        assert!(!c.status().geo_ready, "临时目录里还没有库");
+
+        std::fs::create_dir_all(paths.data_dir()).unwrap();
+        std::fs::copy(&real, paths.data_dir().join("ip2region_v4.xdb")).unwrap();
+
+        // 关闭后不得再显示地理位置
+        let mut cfg = c.config();
+        cfg.geo.enabled = false;
+        c.save_config(cfg).unwrap();
+        assert!(!c.status().geo_ready);
+        assert_eq!(c.location_of("8.8.8.8"), "未知");
+
+        // 重新开启必须立刻加载成功，而不是等下次启动
+        let mut cfg = c.config();
+        cfg.geo.enabled = true;
+        c.save_config(cfg).unwrap();
+        assert!(c.status().geo_ready, "库已就位却未加载");
+        assert!(c.location_of("8.8.8.8").contains("United States"));
     }
 }

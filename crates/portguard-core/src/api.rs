@@ -37,6 +37,10 @@ pub struct StatusView {
     pub block_icmp: bool,
     pub autostart: bool,
     pub rdp_enabled: bool,
+    /// 地理位置库是否已加载（未加载时列表中的地理位置恒为「未知」）。
+    pub geo_ready: bool,
+    /// 地理位置库状态说明：加载成功时是数据库路径，否则是中文原因。
+    pub geo_status: String,
 }
 
 /// 「当前连接 / 跟踪中」列表行。
@@ -60,6 +64,8 @@ pub struct ConnectionView {
     pub state: String,
     /// 是否命中白名单。
     pub whitelisted: bool,
+    /// 来源 IP 的地理位置，仅供展示（查不到为「未知」，规范 22）。
+    pub location: String,
 }
 
 /// 「封停列表」行。
@@ -79,6 +85,8 @@ pub struct BanView {
     pub remaining_seconds: Option<u64>,
     /// 防火墙规则名，便于运维核对。
     pub rule_name: String,
+    /// 被封停 IP 的地理位置，仅供展示（查不到为「未知」，规范 22）。
+    pub location: String,
 }
 
 /// 网卡列表项。

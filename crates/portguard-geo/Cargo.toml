@@ -1,0 +1,8 @@
+[package]
+name = "portguard-geo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+portguard-core.workspace = true

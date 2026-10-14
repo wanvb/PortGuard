@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
 > 最后更新：2026-10-14
-> 测试规模：**221 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 测试规模：**243 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -9,15 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 73 | 完成 |
+| `portguard-core` | 74 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
 | `portguard-storage` | 19 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
 | `portguard-win` | 27 | 完成 |
+| `portguard-geo` | 18 | 完成 |
 | `portguard-web` | 32 | 完成 |
-| `portguard-app` | 23 | 完成 |
-| **合计** | **221** | — |
+| `portguard-app` | 26 | 完成 |
+| **合计** | **243** | — |
 
 ---
 
@@ -29,7 +30,8 @@
 
 ### Known Issues
 
-- **旧版文件全部不可用**：仓库内没有 `PortGuard.txt`（易语言源码）、`config.dat`、`BanData.bin`、`ip2region_v4.xdb`。行为基线来自规范文本而非逆向原程序，细节可能与原版存在出入
+- **行为基线来自规范文本而非逆向原程序**：旧版源码 `PortGuard.txt` 不作为兼容目标，细节（窗口默认值、边界取舍）可能与原版存在出入
+- **旧版数据文件已放弃**：`config.dat` / `BanData.bin` 永久不迁移，见 Phase 13
 
 ---
 
@@ -37,7 +39,7 @@
 
 ### Completed
 
-- 8 个 crate 的 workspace，Rust 1.77.2 锁定，依赖精确锁定
+- 9 个 crate 的 workspace（Phase 13 新增 `portguard-geo`），Rust 1.77.2 锁定，依赖精确锁定
 - `Cargo.lock` 入库
 
 ---
@@ -194,14 +196,21 @@
 
 ## Phase 13 — Legacy Migration
 
-### Known Issues
+### Closed（已终止）
 
-- **受阻**：旧版数据文件全部缺失（`config.dat`、`BanData.bin`、`ip2region_v4.xdb`、`PortGuard.txt`），既无格式样本也无解析依据。详见 `docs/legacy-mapping.md`
+- **永久放弃旧版数据迁移**（用户决策）：`config.dat`、`BanData.bin`、`PortGuard.txt` 三者不再读取、不解析、不留兼容分支。仓库内既无格式样本，盲写解析器只会产生静默丢规则的假迁移。详见 `docs/legacy-mapping.md`
+- 从旧版升级的用户需在新版面板中重新填写白名单 / 黑名单 / 端口阈值
 
-### Next
+### Completed（同批完成的 IP 地理位置）
 
-- 若能取得真实旧版文件，再补 `config.dat` / `BanData.bin` 的解析与迁移
-- IP 地理位置展示：已预留在 `docs/开发文档.md` 第 22 节，实现需 `ip2region_v4.xdb`，当前未提供
+- 新增 `portguard-geo` crate：`ip2region` xdb v3 格式解析 + 查询（向量索引 + 段索引二分）
+- 配置新增 `[geo] enabled` / `[geo] db`（默认开启、默认 `ip2region_v4.xdb`），保存后立即重载
+- 面板「当前连接」「封停列表」新增「地理位置」列，设置页新增「地理位置」卡片并显示库状态
+- 严格遵循规范 22：只用于展示，判定路径零接触；查询失败一律「未知」
+
+### Tests
+
+- `db.rs` 8、`lib.rs` 5、`record.rs` 5（含真实 10.2 MiB 库的查询用例，库缺失时跳过）
 
 ---
 
@@ -232,7 +241,7 @@
 
 ### Completed
 
-- `cargo build --release` 产物 `PortGuard.exe` 约 **1.0 MB**（1026560 字节），单文件、无外部资源
+- `cargo build --release` 产物 `PortGuard.exe` 约 **1.0 MB**（1048064 字节），单文件、无外部资源（地理位置库是外部文件，未内嵌）
 - release 版真机复验：
   - 面板可访问（首页 14169 字节，前端资源确认已内嵌）
   - 抓包就绪，3 秒捕获 1047 个包
@@ -242,6 +251,11 @@
   - 退出后系统中无 `PortGuard` 规则残留、无进程残留
 - 局部配置健壮性：只写 `[panel]` 一段的 `config.toml`，其余字段走 `serde(default)`，
   保护端口仍为 4 个（未静默丢失）
+- 地理位置（首次 release 复验）：`/api/status` 返回 `geo_ready=true` 且状态为实际库路径；
+  手动封停 `203.0.113.9` → 封停列表显示「保留地址」且防火墙规则远端 IP 为 `203.0.113.9/32`；
+  解封后规则删除、系统中 `PortGuard` 规则数为 0
+- 地理位置开关即时生效：`POST /api/config` 关闭 → `geo_ready=false`，重新开启 → `geo_ready=true`，
+  无需重启（日志分别为「地理位置不可用：地理位置展示已在配置中关闭」与「地理位置库已加载：<路径>」）
 
 ### Next
 
@@ -256,7 +270,7 @@
 | 项 | 说明 |
 | --- | --- |
 | 面板无认证 | 仅靠回环绑定与请求头校验，绑到非回环地址时需用户自行承担风险 |
-| 旧版迁移缺失 | 见 Phase 13 |
-| IP 地理位置 | 未实现，需 `ip2region_v4.xdb` |
+| 旧版迁移 | 已永久放弃（非「缺失」），见 Phase 13 与 `docs/legacy-mapping.md` |
+| IP 地理位置 | 已实现（`portguard-geo`）；需 `ip2region_v4.xdb` 随程序分发，库缺失时仅显示「未知」，不影响判定 |
 | Win7 实测 | 未在目标系统上运行过 |
 | RDP 保护 | 依赖 Windows 会话枚举，未能覆盖所有远程桌面变体（如 RDP 网关中转） |

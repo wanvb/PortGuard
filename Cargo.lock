@@ -66,6 +66,7 @@ version = "0.1.0"
 dependencies = [
  "portguard-core",
  "portguard-firewall",
+ "portguard-geo",
  "portguard-packet",
  "portguard-rdp",
  "portguard-storage",
@@ -94,6 +95,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "portguard-geo"
+version = "0.1.0"
+dependencies = [
+ "portguard-core",
 ]
 
 [[package]]

@@ -192,6 +192,31 @@ impl Default for LoggingConfig {
     }
 }
 
+/// IP 地理位置展示配置。
+///
+/// 地理位置只用于面板展示，**不参与封停判定**（规范 22）：
+/// 数据库文件不随程序分发，缺失或损坏时面板显示「未知」并照常工作。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeoConfig {
+    /// 是否展示来源 IP 的地理位置。
+    pub enabled: bool,
+    /// 数据库文件名。相对路径先按数据目录 `data/` 查找，再按程序目录查找。
+    pub db: String,
+}
+
+impl Default for GeoConfig {
+    fn default() -> Self {
+        GeoConfig {
+            enabled: true,
+            db: DEFAULT_GEO_DB.to_string(),
+        }
+    }
+}
+
+/// 默认地理位置库文件名。
+pub const DEFAULT_GEO_DB: &str = "ip2region_v4.xdb";
+
 /// 顶层配置。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -204,6 +229,7 @@ pub struct Config {
     pub rdp: RdpConfig,
     pub system: SystemConfig,
     pub logging: LoggingConfig,
+    pub geo: GeoConfig,
     /// 配置结构版本，便于后续迁移。
     pub config_version: u32,
 }
@@ -231,6 +257,7 @@ impl Config {
             rdp: RdpConfig::default(),
             system: SystemConfig::default(),
             logging: LoggingConfig::default(),
+            geo: GeoConfig::default(),
         }
     }
 
@@ -282,6 +309,9 @@ impl Config {
         }
         if self.logging.max_memory_lines == 0 {
             self.logging.max_memory_lines = 2000;
+        }
+        if self.geo.db.trim().is_empty() {
+            self.geo.db = DEFAULT_GEO_DB.to_string();
         }
         self.lists.whitelist = normalize_rule_lines(&self.lists.whitelist);
         self.lists.blacklist = normalize_rule_lines(&self.lists.blacklist);
@@ -400,6 +430,17 @@ mod tests {
         let mut c = Config::with_defaults();
         c.panel.bind = "127.0.0.1".to_string();
         assert!(!c.validate().is_empty());
+    }
+
+    #[test]
+    fn 地理配置默认开启且文件名可回退() {
+        let mut c = Config::with_defaults();
+        assert!(c.geo.enabled, "默认应展示地理位置");
+        assert_eq!(c.geo.db, DEFAULT_GEO_DB);
+        // 用户把文件名清空时回退默认值，而不是留下一个找不到的路径
+        c.geo.db = "   ".to_string();
+        c.normalize();
+        assert_eq!(c.geo.db, DEFAULT_GEO_DB);
     }
 
     #[test]

@@ -3,3 +3,12 @@
 *.zip
 *.rar
 
+# 第三方 IP 地理位置库（约 10 MiB 二进制，随程序分发而非入库）
+ip2region_v4.xdb
+/data/ip2region_v4.xdb
+
+# 运行期生成的数据（不应入库）
+/data/
+/logs/
+/state/
+/config.toml

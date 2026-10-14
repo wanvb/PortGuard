@@ -16,6 +16,7 @@ portguard-storage.workspace = true
 portguard-win.workspace = true
 portguard-rdp.workspace = true
 portguard-web.workspace = true
+portguard-geo.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
