@@ -68,67 +68,56 @@ textarea {
 /* ---------------- 布局 ---------------- */
 
 .app {
-  display: grid;
-  grid-template-columns: 252px 1fr;
-  min-height: 100vh;
-}
-
-.sidebar {
-  background: linear-gradient(180deg, #0d141d 0%, #0a1017 100%);
-  border-right: 1px solid var(--border-soft);
   display: flex;
   flex-direction: column;
-  position: sticky;
-  top: 0;
-  height: 100vh;
+  min-height: 100vh;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 18px 18px 14px;
-  border-bottom: 1px solid var(--border-soft);
+  gap: 9px;
+  padding-right: 14px;
+  border-right: 1px solid var(--border-soft);
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
 }
 
 .brand-name {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.4px;
+  line-height: 1.25;
 }
 
 .brand-sub {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
   letter-spacing: 2px;
+  line-height: 1.25;
 }
 
 .nav {
-  padding: 12px 10px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .nav-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
+  padding: 7px 14px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--text-dim);
-  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -139,15 +128,16 @@ textarea {
 }
 
 .nav-item.active {
-  background: linear-gradient(90deg, rgba(56, 189, 248, 0.16), rgba(56, 189, 248, 0.02));
-  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.38);
   color: #dff3ff;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .nav-badge {
   font-family: var(--mono);
   font-size: 12px;
-  padding: 2px 8px;
+  padding: 1px 8px;
   border-radius: 99px;
   background: var(--surface-3);
   color: var(--text-dim);
@@ -160,34 +150,54 @@ textarea {
   color: #cdeeff;
 }
 
-.sidebar-foot {
-  padding: 12px 18px 16px;
-  border-top: 1px solid var(--border-soft);
-  font-size: 12.5px;
-  color: var(--muted);
-  line-height: 1.7;
-}
-
 main {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-/* ---------------- 顶部状态条 ---------------- */
+/* ---------------- 顶部横排导航 + 状态条 ---------------- */
 
 .topbar {
   position: sticky;
   top: 0;
   z-index: 20;
   display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 18px;
+  background: rgba(9, 13, 18, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.topbar-main {
+  display: flex;
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-  padding: 12px 20px;
-  background: rgba(9, 13, 18, 0.92);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border-soft);
+}
+
+/* 操作按钮始终靠右，导航换行时也不会插到中间 */
+.topbar-main .form-actions {
+  margin-left: auto;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.chips-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .chips {
@@ -307,7 +317,7 @@ main {
 
 .page {
   display: none;
-  padding: 20px;
+  padding: 16px 18px;
   gap: 16px;
   flex-direction: column;
 }
@@ -410,9 +420,10 @@ main {
 
 /* ---------------- 表格 ---------------- */
 
+/* 顶部导航由竖排改为横排后表头变高，滚动区高扣除量随之增大 */
 .table-wrap {
   overflow: auto;
-  max-height: calc(100vh - 280px);
+  max-height: calc(100vh - 320px);
 }
 
 table {
@@ -781,7 +792,7 @@ textarea {
   font-family: var(--mono);
   font-size: 14px;
   line-height: 1.75;
-  max-height: calc(100vh - 290px);
+  max-height: calc(100vh - 330px);
   overflow: auto;
   padding: 10px 14px;
   background: #070b10;
@@ -910,23 +921,39 @@ textarea {
 
 /* ---------------- 窄屏 ---------------- */
 
-@media (max-width: 860px) {
-  .app {
-    grid-template-columns: 1fr;
+@media (max-width: 900px) {
+  .topbar {
+    padding: 8px 12px;
   }
-  .sidebar {
-    position: static;
-    height: auto;
+  .brand {
+    border-right: none;
+    padding-right: 0;
   }
+  .topbar-main {
+    gap: 10px;
+  }
+  .brand {
+    order: 1;
+  }
+  .topbar-main .form-actions {
+    order: 2;
+    margin-left: auto;
+  }
+  /* 导航独占一行并横向滚动，避免挤压操作按钮 */
   .nav {
-    flex-direction: row;
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: nowrap;
     overflow-x: auto;
   }
-  .nav-item {
-    width: auto;
-    white-space: nowrap;
+  .chips-foot {
+    margin-left: 0;
   }
-  .table-wrap {
+  .page {
+    padding: 12px;
+  }
+  .table-wrap,
+  .logs {
     max-height: none;
   }
 }

@@ -9,50 +9,51 @@
   </head>
   <body>
     <div class="app">
-      <!-- 侧边导航 -->
-      <aside class="sidebar">
-        <div class="brand">
-          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-            <path
-              d="M16 2.6 27 6.4v10.2c0 6.6-4.5 11.4-11 13.1-6.5-1.7-11-6.5-11-13.1V6.4z"
-              fill="none"
-              stroke="#38bdf8"
-              stroke-width="1.8"
-            />
-            <path
-              d="M16 10.5v6.2M16 20.4v1.6"
-              stroke="#38bdf8"
-              stroke-width="2.1"
-              stroke-linecap="round"
-            />
-          </svg>
-          <div>
-            <div class="brand-name">PortGuard</div>
-            <div class="brand-sub">端口守卫</div>
+      <!-- 顶部横排导航 + 状态条：笔记本窄屏下不再占用左右空间，
+           整页宽度全部留给数据表，避免横向滚动 -->
+      <header class="topbar">
+        <div class="topbar-main">
+          <div class="brand">
+            <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+              <path
+                d="M16 2.6 27 6.4v10.2c0 6.6-4.5 11.4-11 13.1-6.5-1.7-11-6.5-11-13.1V6.4z"
+                fill="none"
+                stroke="#38bdf8"
+                stroke-width="1.8"
+              />
+              <path
+                d="M16 10.5v6.2M16 20.4v1.6"
+                stroke="#38bdf8"
+                stroke-width="2.1"
+                stroke-linecap="round"
+              />
+            </svg>
+            <div>
+              <div class="brand-name">PortGuard</div>
+              <div class="brand-sub">端口守卫</div>
+            </div>
+          </div>
+
+          <nav class="nav">
+            <button class="nav-item active" data-page="overview">概览</button>
+            <button class="nav-item" data-page="connections">
+              当前连接<span class="nav-badge" id="badge-connections">0</span>
+            </button>
+            <button class="nav-item" data-page="bans">
+              封停列表<span class="nav-badge" id="badge-bans">0</span>
+            </button>
+            <button class="nav-item" data-page="settings">设置</button>
+            <button class="nav-item" data-page="logs">运行日志</button>
+          </nav>
+
+          <div class="form-actions">
+            <button class="btn primary" id="btn-start">开始保护</button>
+            <button class="btn" id="btn-stop">停止保护</button>
+            <button class="btn" id="btn-refresh">立即刷新</button>
           </div>
         </div>
 
-        <nav class="nav">
-          <button class="nav-item active" data-page="overview">概览</button>
-          <button class="nav-item" data-page="connections">
-            当前连接<span class="nav-badge" id="badge-connections">0</span>
-          </button>
-          <button class="nav-item" data-page="bans">
-            封停列表<span class="nav-badge" id="badge-bans">0</span>
-          </button>
-          <button class="nav-item" data-page="settings">设置</button>
-          <button class="nav-item" data-page="logs">运行日志</button>
-        </nav>
-
-        <div class="sidebar-foot">
-          <div id="foot-version">版本读取中…</div>
-          <div>仅监听本机回环地址</div>
-        </div>
-      </aside>
-
-      <main>
-        <!-- 顶部状态条 -->
-        <header class="topbar">
+        <div class="topbar-status">
           <div class="chips">
             <span class="chip">
               <i class="dot" id="chip-run-dot"></i>
@@ -66,13 +67,14 @@
             </span>
             <span class="chip">运行时长 <b id="chip-uptime">-</b></span>
           </div>
-          <div class="form-actions">
-            <button class="btn primary" id="btn-start">开始保护</button>
-            <button class="btn" id="btn-stop">停止保护</button>
-            <button class="btn" id="btn-refresh">立即刷新</button>
+          <div class="chips-foot">
+            <span id="foot-version">版本读取中…</span>
+            <span>仅监听本机回环地址</span>
           </div>
-        </header>
+        </div>
+      </header>
 
+      <main>
         <!-- 概览 -->
         <section class="page active" id="page-overview">
           <div class="stats">

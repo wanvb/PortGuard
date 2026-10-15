@@ -9,16 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 91 | 完成 |
+| `portguard-core` | 92 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
 | `portguard-storage` | 19 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
 | `portguard-win` | 30 | 完成 |
 | `portguard-geo` | 18 | 完成 |
-| `portguard-web` | 33 | 完成 |
+| `portguard-web` | 34 | 完成 |
 | `portguard-app` | 33 | 完成 |
-| **合计** | **271** | — |
+| **合计** | **273** | — |
 
 ---
 
@@ -429,6 +429,40 @@
 ### Known Issues
 
 - 老配置想收紧回 10 的用户：迁移会把 10 当作「旧默认值」处理，需在面板里重新填入 10
+
+---
+
+## Phase 22 — 面板导航由侧边栏改为顶部横排
+
+**背景**：面板此前是「左侧 252px 侧边栏 + 右侧内容」布局，在笔记本上浏览时横向空间被吃掉
+四分之一，连接表 / 封停表列多，必须拖动横向滚动条才能看全，读表体验差。
+
+### Completed
+
+- **导航横排到顶部**（`assets/index.html`）：原 `.sidebar`（品牌 + 导航 + 版本页脚）整体移除，
+  五个页面入口与「开始保护 / 停止保护 / 立即刷新」并排进 `.topbar` 第一行；
+  状态 chips（状态 / 网卡 / 本机 IP / 权限 / 运行时长）与版本号、「仅监听本机回环地址」
+  合并到第二行右侧。`.app` 由双列 grid 退化为纵向 flex，`main` 不再被侧边栏挤压
+- **样式重做**（`assets/style.css`）：`.topbar` 改为两行纵向容器（`.topbar-main` / `.topbar-status`），
+  导航项从竖排整宽按钮改为横排页签（`inline-flex` + 选中态底部 2px 强调色），
+  操作按钮 `margin-left: auto` 始终靠右；页面内边距 20px → 16px 18px，
+  表格滚动高扣除量随表头增高调整（`calc(100vh - 320px)`，日志 330px）
+- **窄屏适配**（≤900px）：品牌与操作按钮留在第一行，导航 `flex-basis: 100%` 换到第二行并横向滚动，
+  不再挤压按钮；该断点下表格与日志取消高度限制，交给整页滚动
+- **不加宽表格**：列数与 `ConnectionView` / `BanView` 字段一一对应，本次只腾空间、不改口径
+- 文档同步：`docs/web-ui-spec.md` 2. 页面结构（含改版原因）、`docs/开发文档.md` 46、
+  `crates/portguard-web/CLAUDE.md`
+
+### Tests
+
+- 新增 1 项：`导航位于顶部横排且无侧边栏`（`index.html` 与 `style.css` 都不允许再出现 sidebar，
+  且五个 `data-page` 入口齐全）；`首页包含关键挂载点` 补入 `foot-version`
+- 合计 **273 项全部通过**（`portguard-web` 33 → 34）
+
+### Known Issues
+
+- 顶部两行表头占位比原单行状态条高约 30px，纵向可视区略减；换来的是整页宽度，
+  笔记本（1366×768）下净收益明显，宽屏下收益更大
 
 ---
 

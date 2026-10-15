@@ -59,8 +59,27 @@ mod tests {
             "id=\"parse-note\"",
             "id=\"tbody-observe\"",
             "id=\"cfg-count-accept\"",
+            // 版本信息已随导航移到顶部状态条，仍是 app.js 的写入目标
+            "id=\"foot-version\"",
         ] {
             assert!(INDEX_HTML.contains(id), "首页缺少挂载点 {}", id);
+        }
+    }
+
+    #[test]
+    fn 导航位于顶部横排且无侧边栏() {
+        // 布局契约：窄屏（笔记本）下左右空间必须全部留给数据表，
+        // 因此导航只能横排在 .topbar 内，不允许再出现占宽的侧边栏容器
+        assert!(INDEX_HTML.contains("class=\"topbar\""), "首页缺少顶部导航容器");
+        assert!(!INDEX_HTML.contains("sidebar"), "导航应横排在顶部，不应存在侧边栏");
+        let css = lookup("/assets/style.css").unwrap().body;
+        assert!(!css.contains(".sidebar"), "样式表不应残留侧边栏规则");
+        for page in ["overview", "connections", "bans", "settings", "logs"] {
+            assert!(
+                INDEX_HTML.contains(&format!("data-page=\"{}\"", page)),
+                "顶部导航缺少 {} 入口",
+                page
+            );
         }
     }
 
