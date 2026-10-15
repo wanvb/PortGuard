@@ -17,7 +17,7 @@
 - `main`：`fn main()`（无参入口，`std::process::exit(run())`）；`fail()` 统一处理启动期致命错误的呈现方式。
 
 ## 关键约束
-- **启动顺序固定**：参数 → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示 → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护 → 主循环 → 收尾。
+- **启动顺序固定**：参数 → **服务模式分发** → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示 → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护 → 主循环 → 收尾。
 - **控制台窗口默认隐藏**（`cli.Options.console == false`）：`portguard_win::hide_own_console_window()` 只在控制台独占本进程时动手，从 cmd 启动或加 `--console` 时保留窗口。隐藏判定必须放在最前（越早越小概率看到黑窗口闪烁），且隐藏后启动期的致命错误一律走 `fail` 的对话框分支 —— 否则表现为「双击没反应」（规范 26.1）。托盘形态不变：右键菜单照旧提供打开面板 / 暂停保护 / 退出。
 - **启动期告警在隐藏控制台后改走托盘气泡**：非管理员、自动开始保护失败两条都写进 `notices`，托盘建好后逐个 `balloon`；服务模式（会话 0）没有托盘，只留日志与面板。
 - **旧配置迁移必须落盘**：`Config::migrate()` 只改内存，主程序拿到非空结果后立即 `store.save`（写盘失败只告警不退出，迁移在本次运行仍然生效）。不落盘的话，第二个实例会拿文件里的旧端口去开面板，而运行中的实例已换到新端口，用户看到的就是「页面打不开」。
@@ -27,14 +27,16 @@
 - **保护端口全空必须告警**：`RuntimeHandle::new` 检测 `config.has_any_protected_port()`，全空时写一条 `warn` 事件（面板可见）与告警日志，避免「程序在跑但零保护」这种静默失效。
 - **先观测再判定**：`PacketSink::consume` 在 `engine.evaluate` **之前**把包记入 `Inner::observer`，被判定层丢弃的包同样要留下记录，否则无法分辨「没抓到」与「被丢掉」。
 - **阈值判定用累计连接次数**：判定不做滑动窗口，`count >= max_attempts` 即封停；计数唯一的归零路径是 `TRACK_RETENTION_MS`（10 分钟）空闲后 `expire_pass` 的 `engine.prune` 回收该条目。调小该值会让计数更快归零（更容易漏封），调大则让「隔很久来一次」的地址也可能被累计到阈值，改动需同步 `docs/behavior-spec.md` 2.6。
-- **连接事件来源可自动回退**：`accept_pass`（随 5 秒 PRUNE 周期跑）在「受保护 TCP 端口无入站 SYN + 有本机发出的 SYN+ACK」同时成立时自动 `engine.set_count_accept(true)`，写 `warn` 事件与日志说明原因。该判定只做一次：配置里 `count_accept` 被显式改动（`apply_config` 检测到值变化）或启动时即为 `true`，都视为用户已决定，之后永不覆盖；只有自动切换的结果在换网卡时允许重新判定。重新开始抓包与切换网卡都要 `reset_observer`。
+- **连接事件来源可自动回退**：`accept_pass`（随 5 秒 PRUNE 周期跑）在「受保护 TCP 端口无入站 SYN + 有本机发出的 SYN+ACK」同时成立时自动 `engine.set_count_accept(true)`，写 `warn` 事件与日志说明原因。该判定只做一次：配置里 `count_accept` 被显式改动（`apply_config` 检测到值变化）或启动时即为 `true`（**默认值**，此时根本没有回退的必要），都视为用户已决定，之后永不覆盖；只有自动切换的结果在换网卡时允许重新判定。因此自动回退只对「旧配置里写着 `false`」的机器有意义。重新开始抓包与切换网卡都要 `reset_observer`。
 - **禁止直接调用 netsh**：所有防火墙操作经 `portguard-firewall` 的 `FirewallBackend` trait；`netsh` 仅由该 crate 内部执行，本 crate 不拼命令。
 - **单实例**：`SingleInstance::acquire()` 返回 `Ok(None)` 时打开已有实例的面板后退出，不启动第二个监听器。
 - **白名单硬校验**：`ban_ip` 与 `blacklist_add` 落库前查白名单；`whitelist_add` 后立即对已封停地址入队解封。
 - **锁中毒不瘫**：`lock_inner` 用 `unwrap_or_else(|e| e.into_inner())` 继续使用内部数据；非测试代码 `deny(clippy::unwrap_used, clippy::expect_used)`。
 - **端口顺延**：面板端口被占用时最多向后试 `PORT_FALLBACK_TRIES` 个端口，保证程序总能起来。
 - **非管理员不启动保护**（规范 23）：非管理员时跳过自动开始保护并打印明确指引，而不是先启动再失败。
-- **服务模式**（`--service`）：由计划任务以 SYSTEM 在会话 0 拉起，既不建托盘也不自动打开浏览器（`should_open_browser` 三条件之一）。
+- **服务模式**（`--service`）：由 Windows 服务管理器（SCM）以 LocalSystem 在会话 0 拉起（服务项由 `portguard_win::Service` 注册），既不建托盘也不自动打开浏览器（`should_open_browser` 三条件之一）。
+- **服务分发必须抢在读配置与单实例之前**：`main::run` 解析参数后发现 `opts.service` 立即调用 `portguard_win::Service::run(move || run_app(opts))`；主体逻辑抽在 `run_app(opts)` 里。一旦落在分发之后，「已有实例在运行」这条早退路径会让 SCM 空等到 30 秒超时，用户看到的是 1053「服务没有及时响应启动或控制请求」。单实例早退在服务模式下不再尝试开浏览器（会话 0 无桌面，只会失败刷日志）。
+- **服务开关只改「是否注册」**：`Controller::set_protection` 的 `Autostart` 分支先 `Service::install` / `Service::uninstall`，成功后才写 `system.autostart` 并落盘；防火墙 / 服务操作失败一律向上返回错误，不得只改配置假装成功（规范 26.1）。勾选不立即启动服务，下次开机由 SCM 拉起。
 - **地理位置在运行期锁之外查询**（规范 22）：`connections()` / `bans()` 先在锁内取快照、释放锁，再用 `location_of` 逐行填充 `location`；抓包线程与判定路径完全不接触 `portguard-geo`。
 - **地理位置库可在运行期重载**：`save_config` 检测到 `geo` 段变化时立即 `reload_geo`，避免「改了设置但没生效」的静默失效；`geo_candidates` 按「数据目录 → 程序目录」给出候选路径。
 

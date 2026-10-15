@@ -164,7 +164,7 @@ const state = {
 const QUICK_SWITCHES = [
   { key: "risky_ports", field: "risky_ports", title: "危险端口保护", hint: "拦截 135/137/138/139/445" },
   { key: "block_icmp", field: "block_icmp", title: "禁止 Ping", hint: "丢弃 ICMP Echo 请求" },
-  { key: "autostart", field: "autostart", title: "开机自动启动", hint: "注册计划任务，开机即防护" },
+  { key: "autostart", field: "autostart", title: "开机自动启动", hint: "注册 Windows 服务，开机即防护" },
   { key: "rdp_guard", field: "rdp_enabled", title: "远程桌面保护", hint: "按客户端计算机名放行" },
 ];
 
@@ -606,7 +606,7 @@ function renderSettings() {
   const sysItems = [
     { field: "risky_ports", title: "危险端口保护", hint: "135/137/138/139/445" },
     { field: "block_icmp", title: "禁止 Ping", hint: "丢弃 ICMP Echo 请求" },
-    { field: "autostart", title: "开机自动启动", hint: "注册计划任务" },
+    { field: "autostart", title: "开机自动启动", hint: "注册 Windows 服务（由 SCM 开机拉起）" },
   ];
   for (const item of sysItems) {
     const input = el("input", { type: "checkbox", "data-system": item.field });

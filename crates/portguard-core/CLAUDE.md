@@ -11,7 +11,7 @@
 | 模块 | pub 类型 / 关键函数 | 说明 |
 |------|------|------|
 | `model` | `Ip`（= `Ipv4Addr`）、`Protocol`、`TrafficDirection`、`PortGroup`、`TcpFlags`、`FlagClass`、`PacketInfo`、`BanReason`、`BanRecord`、`IgnoreCounters`、`Statistics` | 领域数据结构与 `Display`/`label`/`as_str` 辅助；`Statistics.ignored` 承载被丢弃数据包的分类计数；`TcpFlags::is_connection_request`（入站 SYN）与 `is_handshake_accepted`（出站 SYN+ACK）是两种连接事件来源 |
-| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`DEFAULT_PANEL_BIND`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/migrate/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（默认 `false`，规范 4.1）；`DEFAULT_PANEL_BIND = "127.0.0.1:58080"` |
+| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`DEFAULT_PANEL_BIND`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/migrate/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（**默认 `true`**，规范 4.1 修订）；`DEFAULT_PANEL_BIND = "127.0.0.1:58080"` |
 | `observe` | `Observer`、`Observation`、`MAX_ENTRIES`、`direction_label` | 纯诊断的抓包观测表：按「方向 + 协议 + 本机端口 + 标志类别」计数，`observe` / `top` / `count_matching` / `clear` / `overflow` |
 | `iprange` | `IpRange`、`IpSet`、`parse_ipv4`、`u32_to_ip` | 支持单 IP / 区间 / 末段通配 / CIDR / 多段通配；`IpSet::from_rules` 任一条非法即整体失败 |
 | `tracker` | `TrackKey`、`TrackEntry`、`ConnectionTracker` | `record` 返回**累计**事件次数；`prune`（条目回收即计数归零）、`remove_ip`、`iter_entries` |
@@ -33,7 +33,7 @@
 - 白名单命中即返回，**不参与阈值判定**；但可计数的包（TCP 为 `SYN && !ACK`、UDP 任意报文）在端口属于某保护组时会经 `record_display_only` 写入跟踪表，仅用于面板展示 `WHITELIST` 状态，不得累加阈值、不得产生封停。
 - 判定中每条丢弃路径都必须累加对应的 `IgnoreCounters`，禁止新增无计数的静默丢弃分支（否则面板无法区分抓包问题与判定问题）。
 - `observe` 模块的观测表（`Observer`）绝不参与判定，也不得因判定结果而丢弃记录；它只回答「这个端口的包有没有被收到」，条目上限 256，超出只累加 `overflow`。
-- 连接事件来源只有两种且互斥：`count_accept == false` 时用入站 `SYN && !ACK`；为 `true` 时改用本机发出的 `SYN+ACK`（云主机混杂模式收不到入站包时使用，见 `docs/behavior-spec.md` 2.1.2）。不得两路同时累加，否则同一次连接会被计两次。
+- 连接事件来源只有两种且互斥：`count_accept == true`（**默认**）时用本机发出的 `SYN+ACK`；为 `false` 时改用入站 `SYN && !ACK`（云主机混杂模式收不到入站包，默认走握手响应口径即可开箱即用，见 `docs/behavior-spec.md` 2.1.2 / 2.5）。不得两路同时累加，否则同一次连接会被计两次、阈值事实上折半。口径判定统一走 `RuleEngine::is_connection_event`，白名单的「仅展示记录」也必须复用同一判据，不得各写一份。
 - `Config::validate` 必须拒绝「三组保护端口全空」的配置：这种配置下程序运行但零保护能力，属静默失效。
 - 一切封停必须经 `BanManager`，UI 与引擎不得直接操作封停 Map（规范 7）。
 - 防火墙规则归属靠 `RULE_PREFIX = "PortGuard-Ban-"` 前缀识别；`is_own_rule` 用于清理时精确筛选，绝不得按 IP 无条件删除系统或第三方规则（规范 8.4）。
@@ -46,12 +46,12 @@
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。
-- 分布：`ban.rs` 11、`config.rs` 14、`engine.rs` 29、`iprange.rs` 11、`logging.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
-- 合计 `#[test]`：89 个。
+- 分布：`ban.rs` 11、`config.rs` 14、`engine.rs` 31、`iprange.rs` 11、`logging.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
+- 合计 `#[test]`：91 个。
 - 关键用例：
   - `ban`：白名单地址手动封停同样被拒绝、永久封停不会被临时封停降级、恢复时丢弃白名单记录并可用到期回收清理防火墙、规则名前缀可识别归属。
   - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝、旧默认面板端口被迁移到新端口（迁移幂等且会如实上报）。
-  - `engine`：白名单优先于黑名单、累计达到阈值即封停、累计计数不因时间间隔归零、入站口径下握手响应不算新连接、`count_accept` 打开后出站 SYN+ACK 计一次、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
+  - `engine`：白名单优先于黑名单、累计达到阈值即封停、累计计数不因时间间隔归零、入站口径（`count_accept = false`）下握手响应不算新连接、默认配置下入站 SYN 不再计数、打开后出站 SYN+ACK 计一次、两种事件来源互斥不会重复计数（阈值不折半）、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
   - `observe`：入站与出站分别归类、同键累计次数、条目上限不会无限增长、可按条件统计服务端口、非本机流量归入端口零。
   - `iprange`：区间写反时自动纠正、多段通配、非尾部通配判定非法、规则集遇非法规则整体失败。
   - `tracker`：间隔很久仍继续累计、定期清理过期条目会重置计数、同地址不同端口分别计数、条目上限触发淘汰不会无限增长。

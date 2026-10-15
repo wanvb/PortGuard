@@ -36,7 +36,7 @@
 | `portguard-firewall` | 全部 Windows 防火墙操作（`netsh advfirewall`），对外只暴露 `FirewallBackend` | `crates/portguard-firewall/CLAUDE.md` |
 | `portguard-storage` | `config.toml` / `bans.json` 读写、日志落盘、路径解析 | `crates/portguard-storage/CLAUDE.md` |
 | `portguard-rdp` | RDP 客户端计算机名保护（会话枚举、策略判定） | `crates/portguard-rdp/CLAUDE.md` |
-| `portguard-win` | Win32 系统集成：权限、单实例、托盘、时区、浏览器、自启动、控制台 | `crates/portguard-win/CLAUDE.md` |
+| `portguard-win` | Win32 系统集成：权限、单实例、托盘、时区、浏览器、开机自启（Windows 服务）、控制台 | `crates/portguard-win/CLAUDE.md` |
 | `portguard-geo` | IP 地理位置查询（ip2region xdb v3），**只用于展示** | `crates/portguard-geo/CLAUDE.md` |
 | `portguard-web` | 内嵌 Web 面板：资源内嵌、纯函数路由、HTTP 服务与安全校验 | `crates/portguard-web/CLAUDE.md` |
 | `portguard-app` | 主程序：启动编排、运行时回路、`PortGuardApi` 实现 | `crates/portguard-app/CLAUDE.md` |

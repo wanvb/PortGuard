@@ -45,7 +45,7 @@
 | `Record.log` | `logs/portguard.log` | 超过 16 MiB 滚动为 `.1` |
 | `ip2region_v4.xdb` | `data/ip2region_v4.xdb` | **沿用同一文件格式**（xdb v3），随程序分发 |
 | 程序目录 | 相对 exe 目录（`AppPaths::resolve`） | 绿色部署，取不到 exe 时回退当前工作目录 |
-| 注册表自启项 | 计划任务 `PortGuard` | 以 `--service` 参数在开机时启动 |
+| 注册表自启项 | Windows 服务 `PortGuard` | 以 `--service` 参数由 SCM 在开机时拉起 |
 
 ---
 
@@ -60,7 +60,7 @@
 | 默认排除 VMware 网卡 | `network.include_virtual` 配置项 | **有意差异**：交给用户决定 |
 | 无网卡自动选择 | 物理优先 + 非 APIPA 优先 | **新增** |
 | 流出方向统计 | `count_outbound`，默认关闭 | **明确化**：默认只统计入站，避免误伤本机外连 |
-| 以 SYN+ACK 累加连接 | `protect.count_accept`，默认关闭但**运行期可自动启用** | 旧版对 SYN+ACK 累加是出于同一原因（该主机混杂模式收不到入站包）：新版保留规范 4.1 的默认口径，同时在观测到「无入站 SYN 却有出站 SYN+ACK」时自动切换并说明 |
+| 以 SYN+ACK 累加连接 | `protect.count_accept`，**默认开启**（旧配置为 `false` 时运行期仍会自动启用） | 旧版对 SYN+ACK 累加是出于同一原因（该主机混杂模式收不到入站包），新版据此把它做成默认口径；两种来源互斥，同一次连接只计一次 |
 | IP 地理位置 | `portguard-geo`（`ip2region_v4.xdb`） | 无（同一数据源） |
 | Win32 窗口 + Tab + ListView | 内嵌 Web 面板 | **形态变更**（用户决策） |
 | 单实例激活已有窗口 | 单实例打开已有实例的面板 | 无窗口形态下的等价实现 |

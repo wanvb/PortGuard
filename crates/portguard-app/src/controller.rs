@@ -420,12 +420,15 @@ impl PortGuardApi for Controller {
     fn set_protection(&self, key: ProtectionSwitch, enabled: bool) -> Result<()> {
         match key {
             ProtectionSwitch::Autostart => {
-                let exe = std::env::current_exe()
-                    .map_err(|e| AppError::Other(format!("无法确定程序路径：{}", e)))?;
+                // 勾选 = 注册开机自启的 Windows 服务；取消 = 卸载该服务。
+                // 注册与否先于配置落盘：防火墙/服务这类系统侧动作失败时不得写配置
+                // 假装成功，否则重启后才发现「开着开关却没自启」。
                 if enabled {
-                    portguard_win::Autostart::enable(&exe)?;
+                    let exe = std::env::current_exe()
+                        .map_err(|e| AppError::Other(format!("无法确定程序路径：{}", e)))?;
+                    portguard_win::Service::install(&exe)?;
                 } else {
-                    portguard_win::Autostart::disable()?;
+                    portguard_win::Service::uninstall()?;
                 }
                 let mut cfg = self.rt.config();
                 cfg.system.autostart = enabled;

@@ -64,7 +64,7 @@ pub fn help_text() -> String {
          用法：{name} [选项]\n\
          \n\
          选项：\n\
-         \x20 --service          服务模式：不开浏览器、不建托盘（计划任务用）\n\
+         \x20 --service          服务模式：由 Windows 服务管理器（SCM）拉起，不开浏览器、不建托盘\n\
          \x20 --console          保留控制台窗口（默认隐藏，只留托盘图标）\n\
          \x20 --no-panel         不启动 Web 控制面板\n\
          \x20 --no-start         启动后不自动开始保护\n\
@@ -90,8 +90,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed> {
             "-V" | "--version" => {
                 return Ok(Parsed::Print(format!("{} {}", NAME, VERSION)));
             }
-            // 服务模式下由计划任务在开机时拉起，无人盯着控制台，
-            // 因此主程序会跳过「自动打开浏览器」这一步
+            // 服务模式下由 SCM 在开机时拉起，跑在会话 0 且无人盯着控制台，
+            // 因此主程序会跳过「自动打开浏览器」这一步，并进入服务分发
             "--service" => opts.service = true,
             "--console" => opts.console = true,
             "--no-panel" => opts.panel = false,

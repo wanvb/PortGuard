@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
-> 最后更新：2026-10-14
-> 测试规模：**267 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 最后更新：2026-10-15
+> 测试规模：**271 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -9,16 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 89 | 完成 |
+| `portguard-core` | 91 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
 | `portguard-storage` | 19 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
-| `portguard-win` | 28 | 完成 |
+| `portguard-win` | 30 | 完成 |
 | `portguard-geo` | 18 | 完成 |
 | `portguard-web` | 33 | 完成 |
 | `portguard-app` | 33 | 完成 |
-| **合计** | **267** | — |
+| **合计** | **271** | — |
 
 ---
 
@@ -176,12 +176,13 @@
 
 - 系统托盘：内嵌 ICO、右键菜单（打开面板 / 切换保护 / 退出）、tooltip 每秒刷新
 - 单实例：命名互斥体，重复启动打开已有实例的面板
-- 开机自启：计划任务（`schtasks`），服务模式 `--service` 不建托盘、不开浏览器
+- 开机自启：注册 Windows 系统服务（SCM 拉起），服务模式 `--service` 不建托盘、不开浏览器
 - 控制台：Ctrl+C 只置标志位，由主循环走完整收尾；UTF-8 代码页
 
 ### Tests
 
-- `wide.rs` 6、`tray.rs` 5、`single_instance.rs` 4、`timezone.rs` 3、`autostart.rs` 2、`browser.rs` 2、`console.rs` 2、`winerr.rs` 2、`admin.rs` 1
+- `wide.rs` 6、`tray.rs` 5、`single_instance.rs` 4、`timezone.rs` 3、`browser.rs` 2、`console.rs` 2、`winerr.rs` 2、`admin.rs` 1
+  （原 `autostart.rs` 的计划任务逻辑在 Phase 20 被 `service.rs` 取代）
 
 ---
 
@@ -233,7 +234,7 @@
 ### Next
 
 - **未验证**：缺 Windows 7 SP1 / Server 2008 R2 / Server 2012 目标机
-- 应验证：程序启动、抓包权限、netsh 规则创建与查询、托盘图标、计划任务、面板在现代浏览器中的显示
+- 应验证：程序启动、抓包权限、netsh 规则创建与查询、托盘图标、系统服务注册与开机拉起、面板在现代浏览器中的显示
 
 ---
 
@@ -301,7 +302,7 @@
   条目上限 256，超出只累加溢出计数；换网卡与重新开始抓包时清空。观测**绝不参与判定**
 - **解析诊断**：抓包层解析失败（非 IPv4 / 分片 / 畸形包）单独计数并保留最多 3 条十六进制样本，
   与观测表一起展示，用于区分「没抓到」与「解析器丢了」
-- **连接事件来源**：`ProtectConfig.count_accept`（默认 `false`，规范 4.1 口径不变）。
+- **连接事件来源**：`ProtectConfig.count_accept`（当时默认 `false`，Phase 20 已改为默认 `true`）。
   打开后 TCP 事件改由本机发出的 `SYN+ACK` 产生（旧版易语言程序正是这种口径），
   设置页新增对应开关
 - **自动回退**：运行期每 5 秒检查，当「受保护 TCP 端口无入站 SYN」且「同端口有出站 SYN+ACK」
@@ -355,6 +356,51 @@
 
 ---
 
+## Phase 20 — 开机自启改用 Windows 系统服务 + 连接事件来源默认开启
+
+**背景**：两处调整。① 开机自启此前注册的是计划任务（`schtasks /SC ONSTART`），
+计划任务与程序本身没有隶属关系、也不在服务管理器里，运维无法用 `sc query` / `services.msc`
+统一查看；② `protect.count_accept` 默认关闭，导致混杂模式收不到入站包的云主机开箱即用性差。
+
+### Completed
+
+- **`portguard-win::service`（新模块，取代 `autostart.rs`）**：
+  - `Service::install(exe)`：`CreateServiceW(SERVICE_AUTO_START, SERVICE_WIN32_OWN_PROCESS, LocalSystem)`
+    注册名为 `PortGuard` 的服务，命令行 `"<exe>" --service`；已存在则改走 `ChangeServiceConfigW`
+    更新路径（程序挪目录后重新勾选仍有效），并写入中文服务描述；顺带删除旧版留下的同名计划任务，
+    避免旧任务与新服务同时拉起两个实例
+  - `Service::uninstall()`：`DeleteService` 前先判 `dwProcessId` —— 服务进程就是当前面板进程时
+    **不停自己**（停掉会让这次 HTTP 响应发不出去），直接删服务项，进程退出后服务自动消失
+  - `Service::run(body)`：`StartServiceCtrlDispatcherW` + `RegisterServiceCtrlHandlerExW`，
+    上报 `SERVICE_START_PENDING` → `SERVICE_RUNNING` → `SERVICE_STOPPED`；
+    `sc stop` / 关机事件转成 `console::request_exit()`，走与 Ctrl+C 完全一致的收尾流程
+  - 手工执行 `PortGuard.exe --service`（非 SCM 拉起）回退为原地直接运行，保留既有含义
+  - `ScHandle` 以 `Drop` 关闭 `SC_HANDLE`（`SC_HANDLE` 是 `Copy` 且无 Drop，不显式关闭会泄漏）
+- **启动即分发**：`main.rs` 拆出 `run_app(opts)`，`--service` 在读配置、抢单实例**之前**
+  就进入 SCM 分发 —— 否则「已有实例在运行」这条早退路径会让 SCM 等到 1053
+  「服务没有及时响应启动或控制请求」；单实例早退在服务模式下不再尝试开浏览器（会话 0 无桌面）
+- **`protect.count_accept` 默认改为 `true`**（面板「统计服务端应答」默认勾选），
+  旧的 `config.toml` 不做迁移，仅改代码默认值
+- **修掉一处与规格不符的实现**：`behavior-spec.md` 2.5 与 `portguard-core/CLAUDE.md` 都写明
+  两种事件来源互斥，但 `engine.rs` 实为**叠加**（入站 `SYN` 永远计数，`count_accept` 只额外放行
+  出站 `SYN+ACK`）。默认值一旦翻成 `true`，入站可见的常规主机每次连接会被计两次、阈值事实上折半。
+  现抽出 `Engine::is_connection_event()` 强制互斥：`true` 只认本机发出的 `SYN+ACK`，
+  `false` 只认入站 `SYN && !ACK`，白名单「仅展示记录」判定复用同一判据
+
+### Tests
+
+- 新增 4 项：`portguard-core` 的 `默认开启统计服务端应答`、`两种事件来源互斥不会重复计数`，
+  `portguard-win` 的服务名 / 显示名与描述可读性、错误码提取
+- 合计 **271 项全部通过**
+
+### Known Issues
+
+- 勾选后**只注册、不立即启动**，下次开机由 SCM 拉起；面板上的开关状态只代表「服务项是否已注册」
+- 服务以 LocalSystem 在会话 0 运行，因此**没有托盘图标**，控制面板仍可正常访问
+- 从旧版计划任务升级的用户：注册服务时会自动删除同名计划任务，无需手工清理
+
+---
+
 ## 当前已知限制
 
 | 项 | 说明 |
@@ -364,6 +410,6 @@
 | IP 地理位置 | 已实现（`portguard-geo`）；需 `ip2region_v4.xdb` 随程序分发，库缺失时仅显示「未知」，不影响判定 |
 | Win7 实测 | 未在目标系统上运行过 |
 | 网卡与 NAT | 只统计「目的地址等于所选网卡地址」的入站包。云主机做 DNAT 时入站包的目的地址已是内网地址（用 `netstat` 的 Local Address 列可确认），必须选中该内网网卡；若把公网地址填成监听地址，所有入站包都会被判为「非本机流量」 |
-| 混杂模式不可见入站包 | 部分云主机 / 网卡的 `SIO_RCVALL` 只放行本机发出的包，入站方向一条都收不到。此时必须依赖 `protect.count_accept`（运行期会自动启用并说明）。已观察到真实案例：同机的 3389 长期无记录（见 Phase 18） |
+| 混杂模式不可见入站包 | 部分云主机 / 网卡的 `SIO_RCVALL` 只放行本机发出的包，入站方向一条都收不到。此时依赖 `protect.count_accept`（**默认已开启**，旧配置为 `false` 时运行期仍会自动启用并说明）。已观察到真实案例：同机的 3389 长期无记录（见 Phase 18） |
 | IPv6 流量不参与统计 | 解析器只处理 IPv4，RDP 的 `[::]:3389` 监听产生的 IPv6 连接不会进入统计，只体现在解析失败计数中 |
 | RDP 保护 | 依赖 Windows 会话枚举，未能覆盖所有远程桌面变体（如 RDP 网关中转） |

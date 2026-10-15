@@ -139,10 +139,11 @@ pub struct RuleEngine {
     /// 默认 `false`：只统计「外部 → 本机受保护端口」的入站请求，
     /// 这是暴力破解与扫描的真实特征；把本机主动外连计入会误伤正常业务。
     count_outbound: bool,
-    /// 是否把「服务端握手响应（SYN+ACK）」也当成一次连接事件。
+    /// 是否把「服务端握手响应（SYN+ACK）」当成一次连接事件。
     ///
     /// 只有本机对受保护端口的入站连接才会发出这种包，因此不存在误伤；
     /// 用于混杂模式收不到入站包的环境（详见 `ProtectConfig::count_accept`）。
+    /// 与入站 `SYN && !ACK` **互斥**，同一连接只会被计一次。
     count_accept: bool,
     /// 连接跟踪器。
     pub tracker: ConnectionTracker,
@@ -211,6 +212,19 @@ impl RuleEngine {
         self.count_accept
     }
 
+    /// 该 TCP 包是否算「一次连接事件」。
+    ///
+    /// 两种事件来源**互斥**（`docs/behavior-spec.md` 2.5）：
+    /// `count_accept` 关闭时只认入站 `SYN && !ACK`；打开时改用本机发出的 `SYN+ACK`。
+    /// 不得两路同时累加 —— 同一次连接会先按请求、再按应答各计一次，阈值事实上折半。
+    fn is_connection_event(&self, pkt: &PacketInfo, inbound: bool) -> bool {
+        if self.count_accept {
+            !inbound && pkt.tcp_flags.is_handshake_accepted()
+        } else {
+            inbound && pkt.tcp_flags.is_connection_request()
+        }
+    }
+
     pub fn stats(&self) -> EngineStats {
         self.stats
     }
@@ -246,7 +260,8 @@ impl RuleEngine {
             };
         }
         // 服务端握手响应（SYN+ACK）虽属流出方向，但只可能是「别人连到本机受保护端口」
-        // 的应答，故在 count_accept 打开时单独放行，不算作本机主动外连。
+        // 的应答，故在 count_accept 打开时放行，不算作本机主动外连。
+        // （是否真的计一次连接由 `is_connection_event` 判断，这里只是别把它当外连丢掉。）
         let accept_signal =
             self.count_accept && pkt.protocol == Protocol::Tcp && pkt.tcp_flags.is_handshake_accepted();
         if outbound && !self.count_outbound && !accept_signal {
@@ -258,6 +273,9 @@ impl RuleEngine {
 
         let peer: Ip = if inbound { pkt.src } else { pkt.dst };
         let service_port = if inbound { pkt.dst_port } else { pkt.src_port };
+        // 是否算一次连接事件。白名单的展示记录与阈值计数共用同一判据，
+        // 避免两处口径漂移（历史上这里曾分头判断）。
+        let tcp_event = self.is_connection_event(pkt, inbound);
 
         // ① 白名单最高优先级：只统计、永不封停。
         if self.whitelist.contains(peer) {
@@ -265,13 +283,7 @@ impl RuleEngine {
             // 白名单不参与阈值判定，但要留下展示记录：否则面板上的 WHITELIST 状态
             // 永远不可达，用户会误以为「白名单里的地址从来没连过」。
             let countable = match pkt.protocol {
-                Protocol::Tcp => {
-                    if inbound {
-                        pkt.tcp_flags.is_connection_request()
-                    } else {
-                        accept_signal
-                    }
-                }
+                Protocol::Tcp => tcp_event,
                 Protocol::Udp => true,
                 Protocol::Icmp => false,
             };
@@ -289,14 +301,8 @@ impl RuleEngine {
         // ③ 保护端口 + 阈值。TCP 必须由 SYN && !ACK 触发。
         match pkt.protocol {
             Protocol::Tcp => {
-                // 连接事件来源：入站按「连接请求（SYN && !ACK）」；
-                // 出站仅在 count_accept 打开时按「握手响应（SYN+ACK）」计一次。
-                let is_event = if inbound {
-                    pkt.tcp_flags.is_connection_request()
-                } else {
-                    accept_signal
-                };
-                if !is_event {
+                // 连接事件来源二选一，见 `is_connection_event`。
+                if !tcp_event {
                     self.count_ignored(|c| c.not_new_connection += 1);
                     return Outcome::Ignored {
                         reason: "not_new_connection",
@@ -507,6 +513,9 @@ mod tests {
 
     fn base_config() -> Config {
         let mut c = Config::with_defaults();
+        // 本文件绝大多数用例走「入站 SYN」口径，显式关掉默认开启的握手响应来源；
+        // 握手响应路径另有专门用例（`默认开启统计服务端应答` 等）。
+        c.protect.count_accept = false;
         c.protect.tcp = ProtectionRule {
             ports: vec![3389],
             max_attempts: 3,
@@ -768,6 +777,41 @@ mod tests {
             }
         );
         assert_eq!(e.tracker.len(), 0);
+    }
+
+    #[test]
+    fn 默认开启统计服务端应答() {
+        // 默认配置（不再显式关闭）下事件来源即为握手响应，入站 SYN 不再计数
+        let cfg = Config::with_defaults();
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        assert!(e.count_accept(), "默认应统计服务端应答");
+        assert_eq!(
+            e.evaluate(&syn_packet(PEER, 3389, 1_000)),
+            Outcome::Ignored {
+                reason: "not_new_connection"
+            },
+            "开启后入站 SYN 不再作为连接事件"
+        );
+        assert!(matches!(
+            e.evaluate(&syn_ack_packet(PEER, 3389, 1_100)),
+            Outcome::Tracking { count: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn 两种事件来源互斥不会重复计数() {
+        // 同一次连接：先到入站 SYN，再发出 SYN+ACK。开启开关后只应计一次。
+        let mut cfg = base_config();
+        cfg.protect.count_accept = true;
+        let mut e = RuleEngine::new(&cfg, ip(LOCAL));
+        e.evaluate(&syn_packet(PEER, 3389, 1_000));
+        let out = e.evaluate(&syn_ack_packet(PEER, 3389, 1_010));
+        assert!(
+            matches!(out, Outcome::Tracking { count: 1, threshold: 3, .. }),
+            "同一次连接不得被计两次：{:?}",
+            out
+        );
+        assert_eq!(e.connection_rows(2_000, 60_000)[0].count, 1);
     }
 
     #[test]

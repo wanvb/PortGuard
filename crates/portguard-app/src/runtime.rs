@@ -970,9 +970,19 @@ mod tests {
         }
     }
 
+    /// 默认配置 + 入站 SYN 口径（关掉默认开启的「统计服务端应答」）。
+    ///
+    /// 本组用例投递的都是入站 SYN 包，而默认口径已改为握手响应（SYN+ACK），
+    /// 不显式关闭就一条都统计不到。
+    fn inbound_config() -> Config {
+        let mut cfg = Config::with_defaults();
+        cfg.protect.count_accept = false;
+        cfg
+    }
+
     #[test]
     fn 单个实例只发放一次封停动作() {
-        let mut cfg = Config::with_defaults();
+        let mut cfg = inbound_config();
         cfg.protect.tcp.max_attempts = 1;
         cfg.network.adapter = "192.168.1.10".to_string();
         let (rt, _, _) = runtime_with(cfg);
@@ -992,7 +1002,7 @@ mod tests {
 
     #[test]
     fn 白名单不产生封停动作() {
-        let mut cfg = Config::with_defaults();
+        let mut cfg = inbound_config();
         cfg.protect.tcp.max_attempts = 1;
         cfg.network.adapter = "192.168.1.10".to_string();
         cfg.lists.whitelist = vec!["203.0.113.9".to_string()];
@@ -1011,7 +1021,7 @@ mod tests {
 
     #[test]
     fn 封停后跟踪行保留并标记状态() {
-        let mut cfg = Config::with_defaults();
+        let mut cfg = inbound_config();
         // 阈值放宽，先只产生跟踪记录、不触发自动封停（避免与工作线程竞态）
         cfg.protect.tcp.max_attempts = 99;
         cfg.network.adapter = "192.168.1.10".to_string();
@@ -1154,7 +1164,8 @@ mod tests {
 
     #[test]
     fn 入站不可见时自动改用握手响应() {
-        let mut cfg = Config::with_defaults();
+        // 自动回退只在「配置里是入站口径」时才有意义（默认已开启就不再回退）
+        let mut cfg = inbound_config();
         cfg.network.adapter = "192.168.1.10".to_string();
         let (rt, _, _) = runtime_with(cfg);
         let sink = sink_of(&rt);
@@ -1181,7 +1192,7 @@ mod tests {
 
     #[test]
     fn 入站可见时不做自动切换() {
-        let mut cfg = Config::with_defaults();
+        let mut cfg = inbound_config();
         cfg.network.adapter = "192.168.1.10".to_string();
         let (rt, _, _) = runtime_with(cfg);
         let sink = sink_of(&rt);

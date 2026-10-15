@@ -33,8 +33,16 @@ static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 ///
 /// 返回 `TRUE` 表示事件已被处理，系统不再执行默认动作（直接终止进程）。
 unsafe extern "system" fn handler(_ctrl_type: u32) -> BOOL {
-    EXIT_REQUESTED.store(true, Ordering::SeqCst);
+    request_exit();
     BOOL(1)
+}
+
+/// 置退出标志，请求主循环走完整收尾流程。
+///
+/// 控制台处理器与服务控制处理器（`crate::service`）共用同一个标志：
+/// 无论退出请求来自 Ctrl+C 还是 `sc stop`，收尾路径完全一致。
+pub fn request_exit() {
+    EXIT_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 /// 注册退出处理器：Ctrl+C / 关闭窗口 / 注销 / 关机时置位标志，交由主循环收尾。

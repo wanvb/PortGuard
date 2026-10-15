@@ -51,12 +51,17 @@ pub struct ProtectConfig {
     pub udp: ProtectionRule,
     /// TCP-WEB 保护端口（原程序中的 WEB 分类，非硬编码 80/443）。
     pub http: ProtectionRule,
-    /// 是否把「服务端握手响应（SYN+ACK）」也当成一次连接事件。
+    /// 是否把「服务端握手响应（SYN+ACK）」当成连接事件（即两种事件来源的开关）。
     ///
-    /// 默认关闭（规范 4.1 只认入站 `SYN && !ACK`）。但在部分云主机上，
-    /// 混杂模式收不到入站包（同类工具的原程序正是因此改用 SYN+ACK 累计），
-    /// 打开本项后 TCP 事件改由本机发出的握手响应产生，不再依赖入站可见性。
-    /// 运行期发现「入站 SYN 一个都没有、出站 SYN+ACK 却有」时会自动启用并在事件流说明。
+    /// **默认开启**：部分云主机 / 网卡的混杂模式收不到入站包（同类工具的原程序
+    /// 正是因此改用 SYN+ACK 累计），默认关闭会让这些机器开箱即失去统计能力。
+    /// 打开后 TCP 事件改由本机发出的握手响应产生，不再依赖入站可见性。
+    ///
+    /// 两种来源**互斥**（详见 `docs/behavior-spec.md` 2.5）：本项为 `false` 时用
+    /// 入站 `SYN && !ACK`；为 `true` 时改用本机发出的 `SYN+ACK`，入站 SYN 不再计数。
+    /// 不得两路同时累加，否则同一次连接会被计两次、阈值事实上折半。
+    /// 运行期仍保留自动回退：配置里是 `false` 且发现「入站 SYN 一个都没有、
+    /// 出站 SYN+ACK 却有」时会自动启用并在事件流说明。
     pub count_accept: bool,
 }
 
@@ -80,7 +85,7 @@ impl Default for ProtectConfig {
                 ports: vec![80, 443],
                 max_attempts: 10,
             },
-            count_accept: false,
+            count_accept: true,
         }
     }
 }
@@ -175,7 +180,7 @@ pub struct SystemConfig {
     pub risky_ports: bool,
     /// 屏蔽 ICMP Echo Request（禁止 Ping）。
     pub block_icmp: bool,
-    /// 开机自动启动（计划任务）。
+    /// 开机自动启动（注册 Windows 系统服务，由 SCM 在开机时拉起）。
     pub autostart: bool,
 }
 
@@ -411,6 +416,8 @@ mod tests {
         assert_eq!(c.ban.duration_seconds, 3600);
         assert_eq!(c.panel.bind, DEFAULT_PANEL_BIND);
         assert_eq!(c.panel.bind, "127.0.0.1:58080");
+        // 「统计服务端应答」默认勾选：云主机 / 网卡收不到入站包时开箱即能用
+        assert!(c.protect.count_accept, "默认应统计服务端应答");
         assert!(c.validate().is_empty());
     }
 

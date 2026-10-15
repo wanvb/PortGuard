@@ -60,6 +60,8 @@
 - **抓包观测**表格：列「方向 / 协议 / 本机端口 / 标志 / 包数」，数据来自 `status.observed`（按次数降序取前 12 条）。这张表回答「这个端口的包到底有没有被收到」，没有数据时给出「保护未启动 / 还没抓到任何包」的空态说明
 - **最近事件**列表：封停、解封与系统提示
 - **系统防护开关**：危险端口保护 / 禁止 Ping / 开机自启 / RDP 客户端保护，直接调 `/api/protection`
+  - 「开机自动启动」勾选＝注册 Windows 系统服务 `PortGuard`（由 SCM 开机拉起），取消＝卸载该服务；
+    勾选后**不立即启动**，下次开机生效。提示文案必须写明是「注册 Windows 服务」，不得再出现「计划任务」
 
 ### 2.2 当前连接
 
@@ -84,7 +86,9 @@
 分区：监听网卡与面板地址、受保护端口与阈值（TCP/WEB/UDP 三组）、连接事件来源、封停策略、IP 名单（白名单/黑名单）、RDP 客户端保护、系统与日志、地理位置、数据目录。
 
 - **地理位置**卡片：开关 + 数据库文件名（默认 `ip2region_v4.xdb`，相对路径依次查找 `data/`、程序目录、当前目录），下方显示当前库状态（已加载路径 / 未找到应放位置 / 加载失败原因）
-- **连接事件来源**卡片：一个开关「统计服务端应答（SYN+ACK）」，对应 `protect.count_accept`；说明文字必须点明「部分云主机 / 网卡的混杂模式收不到入站包」，并指向概览页的「抓包观测」用于确认
+- **连接事件来源**卡片：一个开关「统计服务端应答（SYN+ACK）」，对应 `protect.count_accept`，**默认勾选**；
+  说明文字必须点明「部分云主机 / 网卡的混杂模式收不到入站包」，并指向概览页的「抓包观测」用于确认；
+  两种事件来源互斥（见 `docs/behavior-spec.md` 2.5），开启后入站 `SYN` 不再计数
 
 - 保存时整体提交 `POST /api/config`
 - 校验失败的字段以中文错误列表显示在页面顶部，**失败时不清空用户已填内容**
@@ -135,7 +139,7 @@
   "started_at_ms": 1791951164584, "version": "0.1.0",
   "protected_ports": 4, "risky_ports": false, "block_icmp": false,
   "autostart": false, "rdp_enabled": false,
-  "parse_errors": 0, "parse_samples": [], "count_accept": false,
+  "parse_errors": 0, "parse_samples": [], "count_accept": true,
   "observed": [{"direction":"入站","protocol":"TCP","port":3389,"flags":"SYN","count":9}]
 }
 ```

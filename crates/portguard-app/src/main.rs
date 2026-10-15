@@ -5,7 +5,8 @@
 //! 启动顺序：
 //!
 //! ```text
-//! 参数 → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示
+//! 参数 → （--service：进入 Windows 服务分发）
+//!      → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示
 //!      → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护
 //!      → 消息循环（托盘 / Ctrl+C）→ 收尾
 //! ```
@@ -60,6 +61,25 @@ fn run() -> i32 {
         }
     };
 
+    // ---- 服务分发 ----
+    // 必须抢在读配置、抢单实例之前：SCM 只给 30 秒等 StartServiceCtrlDispatcherW，
+    // 而这段启动流程里「已有实例在运行」等分支会提前返回，一旦落在分发之前，
+    // 用户看到的就是「1053 服务没有及时响应启动或控制请求」。
+    if opts.service {
+        return match portguard_win::Service::run(move || run_app(opts)) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("服务模式启动失败：{}", e);
+                1
+            }
+        };
+    }
+
+    run_app(opts)
+}
+
+/// 程序主体。服务模式下来自 SCM 的服务线程，其余情况来自主线程。
+fn run_app(opts: cli::Options) -> i32 {
     // ---- 控制台窗口 ----
     // 越早越好：窗口创建到隐藏之间的这段时间是用户唯一会看到黑窗口的时刻。
     let console_hidden = !opts.console && portguard_win::hide_own_console_window();
@@ -115,8 +135,13 @@ fn run() -> i32 {
     let _guard = match portguard_win::SingleInstance::acquire() {
         Ok(g) => g,
         Err(_) => {
-            println!("PortGuard 已在运行，正在为你打开现有控制面板…");
-            open_panel(&cfg, &logger);
+            // 服务模式跑在会话 0，没有交互桌面，开浏览器只会失败刷日志。
+            if !opts.service {
+                println!("PortGuard 已在运行，正在为你打开现有控制面板…");
+                open_panel(&cfg, &logger);
+            } else {
+                logger.info("已有 PortGuard 实例在运行，本次服务启动退出".to_string());
+            }
             return 0;
         }
     };
