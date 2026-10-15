@@ -182,5 +182,8 @@ cargo test --workspace         :: 295 项测试
 cargo clippy --workspace --all-targets
 ```
 
+## 使用
+下载对应位数的exe文件后，再到`https://gitee.com/smartavs_01/ip2region/blob/master/data/ip2region_v4.xdb`下载数据库文件放到exe根目录运行即可，只需要`PortGuard.exe`和`ip2region_v4.xdb`两个文件即可正常运行。
+
 依赖精确锁定，`Cargo.lock` 入库；判定逻辑（白名单优先、累计次数口径、只删自己的防火墙规则）
 都有对应测试守住，改动前请先读 `docs/behavior-spec.md` 与相关 crate 的 `CLAUDE.md`。
