@@ -75,6 +75,7 @@ build.bat            :: 菜单 [1] Release 构建，[8] 打包到 dist\（exe + 
 :: 只出 32 位：target\i686-pc-windows-msvc\release\PortGuard.exe
 :: 两个一起出并改名（发布用）：dist\PortGuard.exe + dist\PortGuard_x32.exe
 python tools\package_release.py
+:: 上传打开 https://github.com/wanvb/PortGuard/releases/new
 
 :: 2. 运行（需要管理员权限：raw socket 抓包与 netsh 防火墙都要求提权）
 target\release\PortGuard.exe
@@ -194,21 +195,4 @@ python tools\package_release.py :: 一次产出 64 + 32 位 exe 到 dist\
 32 位系统（或 32 位 Server 2008）请用 `PortGuard_x32.exe`；两种位数的 exe 功能完全一致，
 差别只在进程位数（32 位版本同样能抓包、写防火墙规则）。
 
-## 发布
 
-发布产物由 `python tools\package_release.py` 生成到 `dist\`：`PortGuard.exe`（64 位）、
-`PortGuard_x32.exe`（32 位）、`ip2region_v4.xdb`（可选）。上传到 GitHub Releases 的步骤如下：
-
-1. 仓库页右侧 **Releases → Create a new release**（或 `https://github.com/wanvb/PortGuard/releases/new`）；
-2. **Choose a tag** 填 `v0.1.0` → 点 **Create new tag: v0.1.0 on publish**；
-3. 填 Release title（如 `PortGuard v0.1.0`），Description 里写清版本变更；
-4. 把 `dist\PortGuard.exe` 与 `dist\PortGuard_x32.exe` **拖进**页面底部的
-   "Attach binaries by dropping them here" 区域，等上传进度条走完（每个约 1 MB，很慢时重试）；
-5. 点 **Publish release**。发布后每个文件的下载地址形如
-   `https://github.com/wanvb/PortGuard/releases/download/v0.1.0/PortGuard.exe`。
-
-后续版本重复上述步骤，只把 tag 换成 `v0.1.1`。注意：**Release 的附件是独立存储，
-改完代码重新发布不会自动更新旧版本的附件**，必须新建 tag。
-
-依赖精确锁定，`Cargo.lock` 入库；判定逻辑（白名单优先、累计次数口径、只删自己的防火墙规则）
-都有对应测试守住，改动前请先读 `docs/behavior-spec.md` 与相关 crate 的 `CLAUDE.md`。
