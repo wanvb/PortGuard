@@ -435,19 +435,57 @@ mod tests {
         assert_eq!(sorted.len(), ids.len(), "菜单项 ID 不可重复");
     }
 
-    /// 内嵌图标若被替换成坏文件，托盘会静默退回系统默认图标；
-    /// 这里直接从字节层面校验 ICO 头，让问题在构建期就暴露。
+    /// 内嵌图标若被替换成坏文件，托盘会静默退回系统默认图标，
+    /// 同一份文件还被 build.rs 拿去当 exe 图标资源；这里直接从字节层面
+    /// 校验 ICO 目录与各条目边界，让问题在构建期就暴露。
     #[test]
-    fn 内嵌图标是合法ico() {
+    fn 内嵌图标是合法多尺寸ico() {
         let data = crate::TRAY_ICON;
         assert!(data.len() > 64, "图标文件过小：{}", data.len());
         assert_eq!(&data[0..4], &[0, 0, 1, 0], "ICONDIR 头不合法");
-        assert_eq!(data[4], 1, "图标数量应为 1");
-        assert_eq!(data[6], 32, "图标宽应为 32");
-        assert_eq!(data[7], 32, "图标高应为 32");
-        assert_eq!(data[12], 32, "位深应为 32");
-        // 声明的图像长度必须与实际剩余字节一致，否则 LoadImageW 会读取越界
-        let declared = u32::from_le_bytes([data[14], data[15], data[16], data[17]]) as usize;
-        assert_eq!(declared, data.len() - 22, "图像长度字段与实际不符");
+
+        let count = u16::from_le_bytes([data[4], data[5]]) as usize;
+        // 托盘要 32×32，exe 图标要小到 16、大到 256，单尺寸不够用
+        assert!(count >= 3, "图标条目过少：{count}");
+
+        let mut sizes = Vec::new();
+        for i in 0..count {
+            let e = 6 + i * 16;
+            // 目录里宽高为 0 表示 256
+            let w = if data[e] == 0 { 256 } else { data[e] as usize };
+            let h = if data[e + 1] == 0 {
+                256
+            } else {
+                data[e + 1] as usize
+            };
+            assert_eq!(w, h, "第 {i} 个条目不是正方形");
+            let kind = u16::from_le_bytes([data[e + 4], data[e + 5]]);
+            assert_eq!(kind, 1, "第 {i} 个条目不是图标类型");
+            let depth = u16::from_le_bytes([data[e + 6], data[e + 7]]);
+            assert_eq!(depth, 32, "第 {i} 个条目位深应为 32");
+            let len =
+                u32::from_le_bytes([data[e + 8], data[e + 9], data[e + 10], data[e + 11]]) as usize;
+            let off = u32::from_le_bytes([data[e + 12], data[e + 13], data[e + 14], data[e + 15]])
+                as usize;
+            // 偏移 + 长度必须落在文件内，否则 LoadImageW / rc.exe 会读取越界
+            assert!(len > 0, "第 {i} 个条目长度为 0");
+            assert!(off + len <= data.len(), "第 {i} 个条目越界");
+            // 大尺寸必须是 PNG 条目，否则未压缩的 256 会让 exe 白胖约 270 KB
+            if w >= 256 {
+                assert_eq!(
+                    &data[off..off + 8],
+                    b"\x89PNG\r\n\x1a\n",
+                    "256 条目应为 PNG 格式"
+                );
+            }
+            sizes.push(w);
+        }
+
+        // 托盘按 SM_CXICON（32）取图，这一档必须存在
+        assert!(sizes.contains(&32), "缺少 32x32 条目：{sizes:?}");
+        let mut unique = sizes.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), sizes.len(), "存在重复尺寸：{sizes:?}");
     }
 }

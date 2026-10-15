@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
-"""生成托盘图标 crates/portguard-win/assets/tray.ico。
+"""生成托盘 / 程序图标 crates/portguard-win/assets/tray.ico。
 
-不依赖 Pillow：手写 32x32 32bpp BGRA 位图，按 ICO 容器格式封装。
+不依赖 Pillow：手写 32bpp BGRA 位图，按 ICO 容器格式封装。
 配色与 Web 面板一致（深底 + 亮蓝描边），保证托盘与面板视觉统一。
+
+同一份 ico 有两条使用路径：
+- 运行时：`portguard-win` 用 include_bytes! 内嵌，写临时文件后 LoadImageW 加载到托盘；
+- 编译时：`portguard-app/build.rs` 调用 rc.exe 把它作为 RT_GROUP_ICON 资源写进 exe，
+  使 PortGuard.exe 自身（资源管理器、任务管理器、控制台窗口）也显示该图标。
+
+尺寸策略：16/32/48 用未压缩 BMP 条目（托盘与常规图标视图），
+256 用 PNG 压缩条目（资源管理器超大图标），避免未压缩 256 撑大 exe 近 270 KB。
 
 用法：python tools/gen_tray_icon.py
 """
 
 import math
 import os
+import struct
+import zlib
 
-SIZE = 32
 # 与 web 面板 style.css 的主题色保持一致
 BG = (0x11, 0x18, 0x23)      # --surface 深底
 EDGE = (0x38, 0xBD, 0xF8)    # --accent 亮蓝描边
 MARK = (0xE6, 0xED, 0xF3)    # --text 盾内对勾
 
-SS = 4  # 每像素超采样倍数，用于抗锯齿
+SIZES = (16, 32, 48, 256)    # 覆盖托盘小图标到资源管理器超大图标
+SS = 4                       # 每像素超采样倍数，用于抗锯齿
 
 
 def shield_half_width(v):
@@ -60,23 +70,22 @@ def sample_class(u, v):
         return 0
     if in_mark(u, v):
         return 3
-    # 内侧 1.5px 视为描边
+    # 内侧约 2px（32 尺寸下）视为描边
     if not in_shield(u, v, inset=0.055):
         return 2
     return 1
 
 
-def build_bgra():
-    """逐像素超采样，返回自底向上的 BGRA 字节。"""
-    rows = []
-    for y in range(SIZE - 1, -1, -1):  # ICO 位图为 bottom-up
-        row = bytearray()
-        for x in range(SIZE):
+def build_rgba(size):
+    """逐像素超采样，返回自上而下的 RGBA 字节（PNG 条目直接可用）。"""
+    rows = bytearray()
+    for y in range(size):
+        for x in range(size):
             acc = [0.0, 0.0, 0.0, 0.0]  # r,g,b, alpha 权重
             for sy in range(SS):
                 for sx in range(SS):
-                    u = (x + (sx + 0.5) / SS) / SIZE
-                    v = (y + (sy + 0.5) / SS) / SIZE
+                    u = (x + (sx + 0.5) / SS) / size
+                    v = (y + (sy + 0.5) / SS) / size
                     cls = sample_class(u, v)
                     if cls == 0:
                         continue
@@ -88,56 +97,86 @@ def build_bgra():
                     acc[3] += w
             a = acc[3]
             if a <= 0:
-                row += b"\x00\x00\x00\x00"
+                rows += b"\x00\x00\x00\x00"
                 continue
             # 按覆盖率还原颜色，避免边缘发暗
             r, g, b = acc[0] / a, acc[1] / a, acc[2] / a
-            row += bytes((int(b + 0.5), int(g + 0.5), int(r + 0.5), int(a * 255 + 0.5)))
-        rows.append(bytes(row))
-    return b"".join(rows)
+            rows += bytes((int(r + 0.5), int(g + 0.5), int(b + 0.5), int(a * 255 + 0.5)))
+    return bytes(rows)
 
 
-def build_ico(pixels):
-    header = (
-        b"\x00\x00"          # reserved
-        b"\x01\x00"          # type = icon
-        b"\x01\x00"          # count = 1
-    )
-    # BITMAPINFOHEADER：高度写两倍，因为格式上还要跟一张 AND 掩码
-    info = (
-        (40).to_bytes(4, "little")
-        + SIZE.to_bytes(4, "little")
-        + (SIZE * 2).to_bytes(4, "little")
-        + (1).to_bytes(2, "little")
-        + (32).to_bytes(2, "little")
-        + (0).to_bytes(4, "little")   # BI_RGB
-        + (0).to_bytes(4, "little")
-        + (0).to_bytes(4, "little")
-        + (0).to_bytes(4, "little")
-        + (0).to_bytes(4, "little")
-        + (0).to_bytes(4, "little")
-    )
-    # AND 掩码：32 位一行 → 4 字节，全 0（透明度由 alpha 通道决定）
-    mask = b"\x00" * (4 * SIZE)
-    image = info + pixels + mask
+def build_bmp(size, rgba):
+    """ICO 的 BMP 条目：BITMAPINFOHEADER + 自底向上 BGRA + AND 掩码。"""
+    pixels = bytearray()
+    for y in range(size - 1, -1, -1):  # ICO 位图为 bottom-up
+        row = rgba[y * size * 4:(y + 1) * size * 4]
+        for x in range(size):
+            r, g, b, a = row[x * 4:x * 4 + 4]
+            pixels += bytes((b, g, r, a))
 
-    entry = (
-        bytes((SIZE, SIZE, 0, 0))
-        + (1).to_bytes(2, "little")
-        + (32).to_bytes(2, "little")
-        + len(image).to_bytes(4, "little")
-        + (6 + 16).to_bytes(4, "little")
+    info = struct.pack(
+        "<IiiHHIIiiII",
+        40,                 # biSize
+        size,               # biWidth
+        size * 2,           # biHeight：格式上还要跟一张 AND 掩码，故写两倍
+        1,                  # biPlanes
+        32,                 # biBitCount
+        0,                  # BI_RGB
+        0, 0, 0, 0, 0,
     )
-    return header + entry + image
+    # AND 掩码：32 位一行 → 每行按 4 字节对齐，全 0（透明度由 alpha 通道决定）
+    mask = b"\x00" * (((size + 31) // 32) * 4 * size)
+    return info + bytes(pixels) + mask
+
+
+def png_chunk(tag, data):
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+
+def build_png(size, rgba):
+    """ICO 的 PNG 条目：Vista 及以上支持，256 尺寸用它可省下约 250 KB。"""
+    raw = bytearray()
+    for y in range(size):
+        raw.append(0)  # 每行过滤器类型：None
+        raw += rgba[y * size * 4:(y + 1) * size * 4]
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)  # 8 位 RGBA
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", ihdr)
+        + png_chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+        + png_chunk(b"IEND", b"")
+    )
+
+
+def build_ico():
+    images = []
+    for size in SIZES:
+        rgba = build_rgba(size)
+        # 大尺寸走 PNG，小尺寸走未压缩 BMP（兼容性最好）
+        images.append((size, build_png(size, rgba) if size >= 256 else build_bmp(size, rgba)))
+
+    header = b"\x00\x00" + b"\x01\x00" + struct.pack("<H", len(images))
+    offset = 6 + 16 * len(images)
+    entries = bytearray()
+    body = bytearray()
+    for size, data in images:
+        # 目录里 256 需写成 0
+        dim = 0 if size >= 256 else size
+        entries += bytes((dim, dim, 0, 0))
+        entries += struct.pack("<HHII", 1, 32, len(data), offset)
+        body += data
+        offset += len(data)
+    return header + bytes(entries) + bytes(body)
 
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out = os.path.join(root, "crates", "portguard-win", "assets", "tray.ico")
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    data = build_ico()
     with open(out, "wb") as f:
-        f.write(build_ico(build_bgra()))
-    print("已生成", out, os.path.getsize(out), "字节")
+        f.write(data)
+    print("已生成", out, len(data), "字节，尺寸", list(SIZES))
 
 
 if __name__ == "__main__":
