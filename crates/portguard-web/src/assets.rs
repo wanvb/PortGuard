@@ -84,6 +84,31 @@ mod tests {
     }
 
     #[test]
+    fn 数据表页撑满视口高度() {
+        // 布局契约：当前连接 / 封停列表 / 运行日志三页的数据区必须靠 flex
+        // 撑满顶栏以下的剩余高度，不允许再用 calc(100vh - 常量) 猜高度
+        // （常量与实际顶栏不符时会出现「只显示几行 + 底部大片空白」）
+        for page in ["connections", "bans", "logs"] {
+            assert!(
+                INDEX_HTML.contains(&format!("class=\"page fill\" id=\"page-{}\"", page)),
+                "{} 页缺少 fill 类，无法撑满高度",
+                page
+            );
+        }
+        let css = lookup("/assets/style.css").unwrap().body;
+        assert!(css.contains(".page.active.fill"), "样式表缺少 fill 页高度规则");
+        assert!(css.contains(".page.fill > .card"), "样式表缺少 fill 页卡片伸缩规则");
+        assert!(
+            css.contains(".page.fill .table-wrap"),
+            "样式表缺少 fill 页滚动区规则"
+        );
+        assert!(
+            !css.contains("100vh - 320px"),
+            "不应再用 calc(100vh - 常量) 固定表体高度"
+        );
+    }
+
+    #[test]
     fn 资源可按键路径查到() {
         let css = lookup("/assets/style.css").unwrap();
         assert!(css.mime.starts_with("text/css"));

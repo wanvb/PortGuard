@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
 > 最后更新：2026-10-15
-> 测试规模：**271 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 测试规模：**274 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -16,9 +16,9 @@
 | `portguard-rdp` | 19 | 完成 |
 | `portguard-win` | 30 | 完成 |
 | `portguard-geo` | 18 | 完成 |
-| `portguard-web` | 34 | 完成 |
+| `portguard-web` | 35 | 完成 |
 | `portguard-app` | 33 | 完成 |
-| **合计** | **273** | — |
+| **合计** | **274** | — |
 
 ---
 
@@ -463,6 +463,41 @@
 
 - 顶部两行表头占位比原单行状态条高约 30px，纵向可视区略减；换来的是整页宽度，
   笔记本（1366×768）下净收益明显，宽屏下收益更大
+
+---
+
+## Phase 23 — 数据表页高度自适应（去掉固定高度常量）
+
+**背景**：当前连接页在 1366×768 下只能显示约 4 行数据，右侧就出现滚动条，页面底部还剩大片空白。
+原因是表体高度用 `calc(100vh - 320px)` 估的——320px 这个常量按上一版表头高度写死，
+顶栏实际更高时（导航换行、浏览器缩放、矮窗口）扣除量就不够，高度被严重低估。
+
+### Completed
+
+- **布局改为定高 + flex 透传**（`assets/style.css`）：`.app` 由 `min-height: 100vh` 改为
+  `height: 100vh; overflow: hidden`，滚动职责下移给 `main`（`flex: 1 1 auto; min-height: 0;
+  overflow-y: auto`），顶栏因此恒定在顶部
+- **`fill` 页撑满**：`当前连接 / 封停列表 / 运行日志` 三页的 `section` 加 `fill` 类，
+  `.page.active.fill` → `.page.fill > .card` → `.page.fill .table-wrap` / `.page.fill .logs`
+  逐级 `min-height: 0` 传递高度约束，数据区正好填满顶栏以下的全部空间，滚动条落在数据区内部
+- **删除两个魔法常量**：`.table-wrap` 的 `calc(100vh - 320px)` 与 `.logs` 的 `calc(100vh - 330px)`
+  全部移除；概览页的观测表（最多 12 行）按内容排布，超出由 `main` 整页滚动
+- **窄屏断点简化**：≤900px 不再取消高度限制（那会让表格无限变高、滚动条跑回页面级），
+  仍按同一套 flex 规则撑满
+- 实测（无头 Chrome，伪造 26 行数据）：1280×720 / 800×600 / 1366×480 三种窗口下，
+  `main` 与 `.page.fill` 高度完全相等（无页面级滚动条），滚动条只出现在数据区；
+  设置页（内容 1637px）仍由 `main` 正常滚动
+- 文档同步：`docs/web-ui-spec.md` 2. 页面结构（新增「高度分配」）、`crates/portguard-web/CLAUDE.md`
+
+### Tests
+
+- 新增 1 项：`数据表页撑满视口高度`（三页必须带 `fill` 类、样式表必须有 `.page.active.fill` /
+  `.page.fill > .card` / `.page.fill .table-wrap`，且全文不得再出现 `100vh - 320px`）
+- 合计 **274 项全部通过**（`portguard-web` 34 → 35）
+
+### Known Issues
+
+- 极矮窗口（可视高度 < 400px）下表体随之变矮，属预期行为；如需保底高度可再加 `min-height` 下限
 
 ---
 

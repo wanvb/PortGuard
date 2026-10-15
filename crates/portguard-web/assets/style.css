@@ -70,7 +70,10 @@ textarea {
 .app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  /* 定高 100vh 并裁掉外层滚动：内容滚动交给 main，
+     这样数据表页才能拿到「确定的剩余高度」去做自适应撑满 */
+  height: 100vh;
+  overflow: hidden;
 }
 
 .brand {
@@ -154,6 +157,10 @@ main {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* 占满顶栏以下的全部高度，并由自己滚动（设置页等多卡片页面靠它） */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* ---------------- 顶部横排导航 + 状态条 ---------------- */
@@ -324,6 +331,8 @@ main {
 
 .page.active {
   display: flex;
+  /* 普通页面按内容高度排布，超出由 main 滚动 */
+  flex: 0 0 auto;
 }
 
 .card {
@@ -358,6 +367,33 @@ main {
 
 .card-body {
   padding: 16px;
+}
+
+/* ---------------- 数据表页高度自适应 ----------------
+   当前连接 / 封停列表 / 运行日志三页只有一个数据区，让它撑满
+   顶栏以下的全部高度，表体内部滚动。
+   旧方案用「视口高度减去一个固定像素常量」猜高度：常量一旦与实际顶栏高度
+   不符（导航换行、缩放、小屏）就会出现「只显示几行 + 底部大片
+   空白」，且窗口越矮偏差越大。改为纯 flex 传递高度后不再依赖常量。
+   —— 高度约束要逐级透传，链条上每一层都必须 min-height: 0，
+   否则内容高度会把容器顶大，滚动条就会跑回页面级。 */
+.page.active.fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.page.fill > .card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.page.fill .table-wrap,
+.page.fill .logs {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 /* ---------------- 统计卡 ---------------- */
@@ -420,10 +456,10 @@ main {
 
 /* ---------------- 表格 ---------------- */
 
-/* 顶部导航由竖排改为横排后表头变高，滚动区高扣除量随之增大 */
+/* 滚动区本身不设高度：撑满高度由 .page.fill 负责，
+   概览页的观测表行数有限（最多 12 行），超出由 main 整页滚动 */
 .table-wrap {
   overflow: auto;
-  max-height: calc(100vh - 320px);
 }
 
 table {
@@ -792,7 +828,6 @@ textarea {
   font-family: var(--mono);
   font-size: 14px;
   line-height: 1.75;
-  max-height: calc(100vh - 330px);
   overflow: auto;
   padding: 10px 14px;
   background: #070b10;
@@ -951,9 +986,5 @@ textarea {
   }
   .page {
     padding: 12px;
-  }
-  .table-wrap,
-  .logs {
-    max-height: none;
   }
 }
