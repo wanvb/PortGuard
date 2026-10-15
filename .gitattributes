@@ -1,0 +1,4 @@
+# 批处理脚本必须使用 CRLF 换行：cmd.exe 按字节偏移解析 .bat，
+# 遇到 LF 换行会错位吞字符，报出大量“不是内部或外部命令”。
+*.bat text eol=crlf
+*.cmd text eol=crlf
