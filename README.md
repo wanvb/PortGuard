@@ -285,11 +285,11 @@ table inet filter {
 		#21868 家里面HOME RDP端口
 		#21528 笔记本RDP
 		#21828 家里面工控机母鸡RDP
-		#21859 家里广电堡垒虚拟机
+		#21859 家里堡垒虚拟机
 		#21890 呼叫中心
-		#21891 马超电脑
-		#21892 马超电脑堡垒机虚拟机
-		#21433 马超电脑虚拟机SQLSERVER
+		#21891 x超电脑
+		#21892 x超电脑堡垒机虚拟机
+		#21433 x超电脑虚拟机SQLSERVER
 		#21432 pgsql
 		
 		#修改后重新加载规则命令sudo nft --check -f /etc/nftables.conf && sudo systemctl restart nftables.service
