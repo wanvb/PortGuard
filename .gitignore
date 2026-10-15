@@ -3,6 +3,8 @@
 *.zip
 *.rar
 *.xdb
+CLAUDE.md
+.claude
 
 # 第三方 IP 地理位置库（约 10 MiB 二进制，随程序分发而非入库）
 ip2region_v4.xdb
