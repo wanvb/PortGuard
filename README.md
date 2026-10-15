@@ -235,94 +235,88 @@ sudo nano /etc/sysconfig/nftables.conf   # CentOS / RHEL 8+（该文件本身也
 ```nft
 #!/usr/sbin/nft -f
 
-# 先清空现有规则集，再载入本文件。
-# 注意：这一步会把 Docker / firewalld / K8s 的规则一起清掉，
-# 跑容器的机器请看文末「注意事项」再动手。
 flush ruleset
 
 table inet filter {
+	# 用于短期统计新建连接次数
+	set attempts {
+		type ipv4_addr          # 定义集合元素的数据类型
+		flags dynamic,timeout   # 设置集合的行为特性标志
+		timeout 30s             # 设置集合元素的默认超时时间
+	}
 
-    # ===== 集合 1：白名单（最高优先级，任何路径都不会被封）=====
-    set whitelist {
-        type ipv4_addr
-        flags interval          # interval：支持 1.2.3.0/24 这种网段写法
-        elements = {
-            127.0.0.0/8,
-            192.168.0.0/16,
-            10.0.0.0/8,
-            172.16.0.0/12
-            # 你的固定管理 IP / 公司出口 IP 也写在这里，例如 113.108.96.7
-        }
-    }
+    # 手动封禁集合：支持网段 (interval)	auto-merge自动合并
+	# sudo nft add element inet filter banned_manual { 1.2.3.0/24 timeout 1d }
+	set banned_manual {
+		type ipv4_addr
+		flags interval, timeout
+	}
+	
+	# 被封禁集合（可动态添加元素；元素可以带 timeout）
+	set banned_auto {
+		type ipv4_addr
+		flags dynamic, timeout
+		# 全局 timeout 不在这里设置（按需在 add element 时指定 timeout）
+	}
 
-    # ===== 集合 2：手动封禁（长期封，支持 IP 与网段，可带 timeout）=====
-    set banned_manual {
-        type ipv4_addr
-        flags interval, timeout
-    }
+	# 白名单集合：放在最前面，白名单 IP 直接 accept
+	# 如果你希望白名单条目也能自动过期，可为其添加 flags dynamic, timeout
+	set whitelist {
+		type ipv4_addr
+		# 如果想要白名单项自动过期，改为： flags dynamic, timeout
+	}
 
-    # ===== 集合 3：自动封禁（由规则写入，元素自带 timeout，到期自动解封）=====
-    set banned_auto {
-        type ipv4_addr
-        flags dynamic, timeout
-        timeout 72h             # 手动 add 且未指定 timeout 时，同样按 72h 自动解封
-        size 65536              # 元素上限，防止集合被撑爆内存
-    }
-
-    # ===== 集合 4：新建连接计数器（按来源 IP 记速率，1 分钟无活动自动回收）=====
-    set conn_flood {
-        type ipv4_addr
-        flags dynamic, timeout
-        timeout 1m
-        size 65536
-    }
-
-    # ===== 受保护的 TCP 端口：换成你自己的 =====
-    # 把 frp 映射出来的端口也填进来（例如 21868 / 21528 / 21890 / 21891）
-    set protect_tcp_ports {
-        type inet_service
-        elements = { 22, 3306, 5432, 3389 }
-    }
-
-    # ==================== 入站 ====================
-    chain input {
-        type filter hook input priority 0; policy accept;
-
-        # 0) 白名单优先：来自白名单的包直接放行，后面所有封禁规则都不生效
-        ip saddr @whitelist accept
-
-        # 1) 手动封禁的 IP / 网段：直接丢弃
+	chain input {
+		# 每秒只允许 2 个 ICMP 包，峰值（burst）允许 5 个
+		icmp type echo-request limit rate 2/second burst 5 packets accept
+		icmp type echo-request drop
+		# 限制单IP对应端口同时连接数 每个IP同时发起的 HTTP(S) 连接不得超过 20 个
+		#tcp dport { 80, 443 } add @conn_limit { ip saddr ct count over 20 } drop
+		
+		type filter hook input priority 0; policy accept;
+		# 0. 白名单优先：在任何限速/封禁之前接受来自白名单的 IP
+		ip saddr @whitelist accept
+		# 丢弃手动封禁的 IP/网段
         ip saddr @banned_manual drop
+		# 1. 丢弃已经在 banned_auto 集合中的 IP
+		ip saddr @banned_auto drop
+		# 2. 针对 SSH/自定义端口做限速新连接
+		tcp dport {22,3306,5432,21868,21828,21859,21890,21891,21892,21528,21433} ct state new jump rate_limit_chain
+		#21868 家里面HOME RDP端口
+		#21528 笔记本RDP
+		#21828 家里面工控机母鸡RDP
+		#21859 家里广电堡垒虚拟机
+		#21890 呼叫中心
+		#21891 马超电脑
+		#21892 马超电脑堡垒机虚拟机
+		#21433 马超电脑虚拟机SQLSERVER
+		#21432 pgsql
+		
+		#修改后重新加载规则命令sudo nft --check -f /etc/nftables.conf && sudo systemctl restart nftables.service
+		
+		# 3. 其他流量逻辑（按需调整） 示例：允许已建立/相关连接
+		ct state established,related accept
+		# 4. 默认（按策略改）
+		# 例如：accept
+	}
 
-        # 2) 自动封禁的 IP：直接丢弃
-        #    放在 established 之前是有意的：被封 IP 已建立的连接也会被一起切断
-        ip saddr @banned_auto drop
+	chain rate_limit_chain {
+		# 如果该IP在 attempts 集合中且超过每分钟3次连接，则加入 banned_auto（带 24h timeout）并丢弃 封24小时自动解封
+		ip saddr @attempts limit rate over 3/minute add @banned_auto { ip saddr timeout 72h } drop
 
-        # 3) 已建立 / 关联的连接直接放行。
-        #    正常用户的 SSH、远程桌面、数据库长连接走这条，不触发下面的计数，因此不会被误封。
-        ct state established,related accept
+		# 否则更新 attempts 超时时间并接受连接
+		update @attempts { ip saddr timeout 30s } accept
+	}
 
-        # 4) 核心：保护端口的新建连接按来源 IP 限速 —— 同一 IP 每分钟新建连接超过 3 个，
-        #    即写入 banned_auto（72 小时后自动解封）并丢弃。
-        #    · 正常人手敲 SSH、点一次远程桌面：一分钟内绝不会超过 3 次
-        #    · 爆破工具 / 扫描器：每秒都在新建连接，第一次超速就被封
-        #    只想丢包不封禁：把中间那段 `add @banned_auto { ... }` 删掉即可。
-        tcp dport @protect_tcp_ports ct state new \
-            add @conn_flood { ip saddr limit rate over 3/minute } \
-            add @banned_auto { ip saddr timeout 72h } drop
+	chain forward {
+		type filter hook forward priority 0; policy accept; # 或将priority改为filter，但需明确策略
+	}
 
-        # 5) 其余入站流量交给 policy accept（本方案只做防爆破，不做全量防火墙）
-    }
-
-    # ==================== 转发 / 出站：保持原样 ====================
-    chain forward {
-        type filter hook forward priority 0; policy accept;
-    }
-
-    chain output {
-        type filter hook output priority 0; policy accept;
-    }
+	chain output {
+		type filter hook output priority 0; policy accept; # 或将priority改为filter，但需明确策略
+	}
 }
+
 ```
 
 ### 步骤 3：校验语法并载入
