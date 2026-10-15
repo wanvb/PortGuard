@@ -12,7 +12,7 @@
 //!
 //! `Tray` 必须在创建它的线程上使用 —— 窗口消息只会投递到那个线程的消息队列。
 
-use crate::wide::{to_wide, write_wide_fixed};
+use crate::wide::{to_wide, write_wide_field};
 use crate::winerr::win_err;
 use portguard_core::error::{AppError, Result};
 use std::cell::RefCell;
@@ -113,7 +113,9 @@ impl Tray {
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = WM_TRAYICON;
         data.hIcon = hicon;
-        write_wide_fixed(&mut data.szTip, tooltip);
+        // 32 位目标下 `NOTIFYICONDATAW` 是 `#[repr(C, packed(1))]`，
+        // 不能对 `szTip` 取 `&mut`（E0793），只能经裸指针写入。
+        unsafe { write_wide_field(core::ptr::addr_of_mut!(data.szTip), tooltip) };
 
         // 桌面环境不可用（服务、无登录会话）时图标加不进去，
         // 但控制台与 Web 面板仍然可用，因此不视为致命错误。
@@ -140,7 +142,7 @@ impl Tray {
                 c.tooltip = text.to_string();
             }
         });
-        write_wide_fixed(&mut self.data.szTip, text);
+        unsafe { write_wide_field(core::ptr::addr_of_mut!(self.data.szTip), text) };
         self.data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         if self.icon_added {
             unsafe {
@@ -164,8 +166,8 @@ impl Tray {
         if !self.icon_added {
             return;
         }
-        write_wide_fixed(&mut self.data.szInfoTitle, title);
-        write_wide_fixed(&mut self.data.szInfo, text);
+        unsafe { write_wide_field(core::ptr::addr_of_mut!(self.data.szInfoTitle), title) };
+        unsafe { write_wide_field(core::ptr::addr_of_mut!(self.data.szInfo), text) };
         self.data.dwInfoFlags = Default::default();
         self.data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_INFO;
         unsafe {

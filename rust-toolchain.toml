@@ -14,5 +14,6 @@
 channel = "1.77.2"
 profile = "minimal"
 components = ["rustfmt", "clippy", "rust-analyzer"]
-targets = ["x86_64-pc-windows-msvc"]
+# x86_64：主流 64 位系统；i686：32 位 exe（PortGuard_x32.exe，供 32 位 Windows 7/2008 使用）
+targets = ["x86_64-pc-windows-msvc", "i686-pc-windows-msvc"]
 
