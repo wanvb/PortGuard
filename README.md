@@ -195,4 +195,288 @@ python tools\package_release.py :: 一次产出 64 + 32 位 exe 到 dist\
 32 位系统（或 32 位 Server 2008）请用 `PortGuard_x32.exe`；两种位数的 exe 功能完全一致，
 差别只在进程位数（32 位版本同样能抓包、写防火墙规则）。
 
+---
+
+## Linux 端同等防护（nftables，系统自带，无需装任何第三方软件）
+
+Linux 上不需要 PortGuard：内核自带 `nf_tables`，用户态命令 `nft` 由发行版仓库提供。
+下面这套规则用「同一来源 IP 每分钟新建连接数超限」判定爆破，超限即写入封禁集合、默认 72 小时后自动解封。
+判定顺序与 Windows 版保持一致：**白名单 → 手动黑名单 → 自动封禁 → 保护端口计数 → 封停**。
+
+| 项 | 要求 |
+| --- | --- |
+| 内核 | ≥ 4.10（用到动态集合 `flags dynamic` 与元素 `timeout`） |
+| 发行版 | Debian 10+ / Ubuntu 20.04+ / CentOS 8+ / RHEL 8+ / Rocky / Alma |
+| 命令 | `nft` ≥ 0.9.1（`nft --version` 查看），无需编译任何东西 |
+| 不支持 | Debian 9 / Ubuntu 16.04 及更早（内核太老，动态集合不可用） |
+
+### 步骤 1：安装 nftables
+
+```bash
+# Debian / Ubuntu
+sudo apt update && sudo apt install -y nftables
+
+# CentOS / RHEL / Rocky / Alma
+sudo dnf install -y nftables
+```
+
+### 步骤 2：写入配置文件
+
+**动手前先做一件事**：把你现在远程管理用的 IP 填进下面 `whitelist` 里。
+否则测试时可能把自己封在门外——被自己封掉只能上 IPMI / 云控制台 VNC 才能救回来。
+
+```bash
+sudo nano /etc/nftables.conf      # Debian / Ubuntu
+sudo nano /etc/sysconfig/nftables.conf   # CentOS / RHEL 8+（该文件本身也是 nft 脚本）
+```
+
+整段复制下面的内容，**只需要改 `whitelist` 和 `protect_tcp_ports` 两处**：
+
+```nft
+#!/usr/sbin/nft -f
+
+# 先清空现有规则集，再载入本文件。
+# 注意：这一步会把 Docker / firewalld / K8s 的规则一起清掉，
+# 跑容器的机器请看文末「注意事项」再动手。
+flush ruleset
+
+table inet filter {
+
+    # ===== 集合 1：白名单（最高优先级，任何路径都不会被封）=====
+    set whitelist {
+        type ipv4_addr
+        flags interval          # interval：支持 1.2.3.0/24 这种网段写法
+        elements = {
+            127.0.0.0/8,
+            192.168.0.0/16,
+            10.0.0.0/8,
+            172.16.0.0/12
+            # 你的固定管理 IP / 公司出口 IP 也写在这里，例如 113.108.96.7
+        }
+    }
+
+    # ===== 集合 2：手动封禁（长期封，支持 IP 与网段，可带 timeout）=====
+    set banned_manual {
+        type ipv4_addr
+        flags interval, timeout
+    }
+
+    # ===== 集合 3：自动封禁（由规则写入，元素自带 timeout，到期自动解封）=====
+    set banned_auto {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 72h             # 手动 add 且未指定 timeout 时，同样按 72h 自动解封
+        size 65536              # 元素上限，防止集合被撑爆内存
+    }
+
+    # ===== 集合 4：新建连接计数器（按来源 IP 记速率，1 分钟无活动自动回收）=====
+    set conn_flood {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 1m
+        size 65536
+    }
+
+    # ===== 受保护的 TCP 端口：换成你自己的 =====
+    # 把 frp 映射出来的端口也填进来（例如 21868 / 21528 / 21890 / 21891）
+    set protect_tcp_ports {
+        type inet_service
+        elements = { 22, 3306, 5432, 3389 }
+    }
+
+    # ==================== 入站 ====================
+    chain input {
+        type filter hook input priority 0; policy accept;
+
+        # 0) 白名单优先：来自白名单的包直接放行，后面所有封禁规则都不生效
+        ip saddr @whitelist accept
+
+        # 1) 手动封禁的 IP / 网段：直接丢弃
+        ip saddr @banned_manual drop
+
+        # 2) 自动封禁的 IP：直接丢弃
+        #    放在 established 之前是有意的：被封 IP 已建立的连接也会被一起切断
+        ip saddr @banned_auto drop
+
+        # 3) 已建立 / 关联的连接直接放行。
+        #    正常用户的 SSH、远程桌面、数据库长连接走这条，不触发下面的计数，因此不会被误封。
+        ct state established,related accept
+
+        # 4) 核心：保护端口的新建连接按来源 IP 限速 —— 同一 IP 每分钟新建连接超过 3 个，
+        #    即写入 banned_auto（72 小时后自动解封）并丢弃。
+        #    · 正常人手敲 SSH、点一次远程桌面：一分钟内绝不会超过 3 次
+        #    · 爆破工具 / 扫描器：每秒都在新建连接，第一次超速就被封
+        #    只想丢包不封禁：把中间那段 `add @banned_auto { ... }` 删掉即可。
+        tcp dport @protect_tcp_ports ct state new \
+            add @conn_flood { ip saddr limit rate over 3/minute } \
+            add @banned_auto { ip saddr timeout 72h } drop
+
+        # 5) 其余入站流量交给 policy accept（本方案只做防爆破，不做全量防火墙）
+    }
+
+    # ==================== 转发 / 出站：保持原样 ====================
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}
+```
+
+### 步骤 3：校验语法并载入
+
+```bash
+# 只检查语法、不生效（有错会直接报行号）
+sudo nft --check -f /etc/nftables.conf
+
+# 检查通过后：立即载入 + 开机自启
+sudo systemctl enable --now nftables
+sudo nft -f /etc/nftables.conf
+```
+
+一条命令搞定（改完规则后每次都执行这句）：
+
+```bash
+sudo nft --check -f /etc/nftables.conf && sudo systemctl restart nftables
+```
+
+### 步骤 4：确认生效
+
+```bash
+sudo nft list ruleset                       # 完整规则
+sudo nft list set inet filter banned_auto   # 当前被封的 IP
+sudo nft list set inet filter whitelist     # 白名单
+```
+
+验证：**换一台机器**（不要用你刚加进白名单的管理机）连 10 次受保护端口：
+
+```bash
+for i in $(seq 1 10); do timeout 1 bash -c "</dev/tcp/目标IP/22"; done
+```
+
+回到服务器执行 `sudo nft list set inet filter banned_auto`，应能看到该来源 IP，并且它已连不上；
+到达 timeout 后元素自动消失，无需人工解封。
+
+### 步骤 5：日常运维命令
+
+| 操作 | 命令 |
+| --- | --- |
+| 看谁被封了 | `sudo nft list table inet filter` |
+| 解封一个 IP | `sudo nft delete element inet filter banned_auto { 58.16.16.162 }` |
+| 手动封一个 IP（72h） | `sudo nft add element inet filter banned_auto { 1.2.3.4 }` |
+| 手动封、1 小时后自动解 | `sudo nft add element inet filter banned_auto { 5.6.7.8 timeout 1h }` |
+| 按网段封（长期） | `sudo nft add element inet filter banned_manual { 113.108.96.0/24 }` |
+| 解封网段 | `sudo nft delete element inet filter banned_manual { 113.108.96.0/24 }` |
+| 加白名单（永久） | `sudo nft add element inet filter whitelist { 1.2.3.4 }` |
+| 加临时白名单（24h） | `sudo nft add element inet filter whitelist { 1.2.3.4 timeout 24h }` |
+| 删白名单 | `sudo nft delete element inet filter whitelist { 1.2.3.4 }` |
+| 全量回滚 | `sudo nft flush ruleset && sudo systemctl disable nftables` |
+
+> `nft` 命令加的元素是**运行时**的，重启后只保留 `/etc/nftables.conf` 里写的那些。
+> 需要长期生效的手动封禁，写进配置文件的 `elements = { ... }` 里。
+
+### 步骤 6：可选加固
+
+**① SYN cookies（防 SYN 半连接打爆服务器）**
+
+```bash
+sysctl -w net.ipv4.tcp_syncookies=1                                  # 立即生效
+echo "net.ipv4.tcp_syncookies = 1" | sudo tee -a /etc/sysctl.conf    # 永久生效
+```
+
+**② ICMP 限速 / 禁 Ping**（粘到 input 链 `ip saddr @whitelist accept` 之后）
+
+```nft
+# 每秒只放行 2 个 ping、突发 5 个，超出的丢弃
+ip protocol icmp icmp type echo-request limit rate 2/second burst 5 packets accept
+ip protocol icmp icmp type echo-request drop
+
+# 想彻底禁 Ping，只留下面这一行
+# ip protocol icmp icmp type echo-request drop
+```
+
+**③ 单 IP 并发连接数上限**（防连接数耗尽，内核 ≥ 4.12；部分发行版该写法不生效，先注释保留）
+
+```nft
+# 集合区加：
+# set conn_limit {
+#     type ipv4_addr
+#     flags dynamic
+#     size 65536
+# }
+# input 链加：单 IP 对 80/443 的并发连接超过 50 就丢弃
+# tcp dport { 80, 443 } ct state new add @conn_limit { ip saddr ct count over 50 } drop
+```
+
+**④ 全端口 SYN 洪水监控脚本（按 C 段封禁）**
+
+```bash
+sudo cat > /usr/local/bin/syn_block.sh <<'EOF'
+#!/bin/bash
+# 全端口 SYN 洪水监控：同一 C 段(/24)的 SYN_RECV 半连接数超过阈值，就封整个 /24
+THRESHOLD=10         # 同一 C 段的半连接数阈值
+BAN_TIME="12h"       # 封禁时长，到期由 nftables 自动解封
+INTERVAL=120         # 检查间隔（秒）
+SET="banned_manual"  # 封进手动封禁集合（支持网段）
+
+while true; do
+    mapfile -t NETS < <(ss -tan state syn-recv 2>/dev/null \
+        | awk 'NR>1 {print $5}' | cut -d: -f1 | grep -E '^[0-9]+\.' \
+        | cut -d. -f1,2,3 | sort | uniq -c \
+        | awk -v t="$THRESHOLD" '$1 > t {print $2}')
+
+    for P in "${NETS[@]}"; do
+        [[ $P =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+        NET="$P.0/24"
+        if ! nft list set inet filter "$SET" 2>/dev/null | grep -q "$NET"; then
+            logger -t syn_block "封禁 $NET $BAN_TIME（SYN 半连接数超过 $THRESHOLD）"
+            echo "[$(date '+%F %T')] 封禁 $NET，时长 $BAN_TIME"
+            nft add element inet filter "$SET" "{ $NET timeout $BAN_TIME }"
+        fi
+    done
+    sleep "$INTERVAL"
+done
+EOF
+sudo chmod +x /usr/local/bin/syn_block.sh
+```
+
+用 systemd 常驻（推荐）：
+
+```bash
+sudo cat > /etc/systemd/system/syn_block.service <<'EOF'
+[Unit]
+Description=SYN flood monitor (nftables C-segment ban)
+After=nftables.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/syn_block.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now syn_block
+```
+
+临时跑一次也可以：`sudo nohup /usr/local/bin/syn_block.sh > /var/log/syn_block.log 2>&1 &`
+
+### 注意事项与回滚
+
+- **`flush ruleset` 是全局的**：会一并清掉 Docker / firewalld / K8s 写进去的规则，容器会瞬间断网。
+  跑容器的机器请把表名 `inet filter` 改成你自己独有的 `table inet portguard`，并删掉 `flush ruleset` 那一行
+  （后续所有命令里的 `filter` 同步改成 `portguard`）。
+- **只保护 IPv4**：要管 IPv6 得再建一套 `type ipv6_addr` 的集合并用 `ip6 saddr` 匹配。
+- **看的是到达本机的入站包**：服务经 DNAT / 端口映射（Docker `-p`、frp 服务端）进来时，
+  `protect_tcp_ports` 里要填**主机侧映射后的端口**。
+- **判定口径与 Windows 版不同**：这里是**速率窗口**（每分钟新建连接数），PortGuard 是**累计次数**。
+  慢速爆破（每隔几十秒连一次、始终不触发每分钟 3 次）不会触发本规则——这类来源靠步骤 6 的
+  C 段 SYN 脚本兜底，或把 `limit rate over 3/minute` 调得更严。
+- **被自己锁在门外时的救法**：本地控制台 / IPMI / 云控制台 VNC 登录后执行
+  `sudo nft flush ruleset && sudo systemctl disable nftables` 即可恢复。
+- **Linux 版没有的东西**：没有 Web 面板、没有 IP 归属地展示、不看 RDP 客户端计算机名，
+  它只做「按来源 IP 的连接速率封禁」这一件事。
+
 
