@@ -4,9 +4,80 @@
 
    安全约定：所有来自接口的数据一律用 textContent 写入 DOM，
    绝不用 innerHTML 拼接，避免把日志/客户端名里的内容当作 HTML 执行。
+
+   界面语言：文案表在 i18n.js，本文件所有面向用户的文字都经 t() 取，
+   不得再写死中文——写死的那一份永远不会跟着语言设置切换。
    ============================================================ */
 
 "use strict";
+
+/* ---------------- 界面语言（中文 / 英文） ----------------
+   静态节点走 index.html 上的 data-i18n / data-i18n-ph / data-i18n-title，
+   动态内容在渲染时调 t()。实际生效的语言来自配置 panel.language：
+   auto 时用服务器系统语言（后端 /api/meta 下发），设置页里改了下拉框但还没
+   保存时先按这个未保存的选择预览。 */
+
+/** 当前生效的语言（"zh" / "en"）。 */
+let LANG = "zh";
+
+/** 取当前语言的文案；缺键退回中文，再退回键名本身（宁可露出键名也不错位）。 */
+function t(key, params) {
+  const entry = (window.PG_I18N || {})[key];
+  let text = entry ? entry[LANG] || entry.zh || key : key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      text = text.split("{" + k + "}").join(String(v));
+    }
+  }
+  return text;
+}
+
+/** 把静态节点的文案刷成当前语言。 */
+function applyI18n() {
+  for (const node of document.querySelectorAll("[data-i18n]")) {
+    node.textContent = t(node.getAttribute("data-i18n"));
+  }
+  for (const node of document.querySelectorAll("[data-i18n-ph]")) {
+    node.setAttribute("placeholder", t(node.getAttribute("data-i18n-ph")));
+  }
+  for (const node of document.querySelectorAll("[data-i18n-title]")) {
+    node.setAttribute("title", t(node.getAttribute("data-i18n-title")));
+  }
+  document.documentElement.lang = LANG === "en" ? "en" : "zh-CN";
+  document.title = t("app.title");
+}
+
+/** 语言设置（auto / zh / en）→ 实际生效的语言。 */
+function resolveLanguage(setting) {
+  if (setting === "zh" || setting === "en") return setting;
+  // auto：用服务器系统语言的探测结果（后端下发），取不到按中文
+  const detected = state.meta && state.meta.language;
+  return detected === "en" ? "en" : "zh";
+}
+
+/** 当前应生效的语言：设置页里未保存的下拉框选择优先于磁盘上的配置。 */
+function effectiveLanguage() {
+  const setting =
+    state.langPreview || (state.config && state.config.panel && state.config.panel.language) || "auto";
+  return resolveLanguage(setting);
+}
+
+/** 切换语言：刷新静态文案，并重渲染当前页面里由脚本生成的内容。 */
+function applyLanguage() {
+  LANG = effectiveLanguage();
+  applyI18n();
+  if (state.status) {
+    renderStatus();
+    renderQuickSwitches();
+    renderEvents();
+    renderConnections();
+    renderBans();
+  }
+  // 设置页只刷新脚本生成的文案，不重建表单（重建会冲掉用户还没保存的输入）
+  if (state.page === "settings" && state.config) retranslateSettings();
+  if (state.page === "logs") renderLogs();
+  renderLogPath();
+}
 
 /* ---------------- 基础工具 ---------------- */
 
@@ -51,9 +122,21 @@ function fmtClock(ms) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/** 后端下发的方向文案（中文枚举）→ 当前语言；认不出的值原样展示。 */
+function directionText(value) {
+  if (value === "入站") return t("dir.in");
+  if (value === "出站") return t("dir.out");
+  return value;
+}
+
+/** TCP 标志类别文本同理：只有「其它」是中文枚举，其余是 SYN / ACK 等原样展示。 */
+function flagsText(value) {
+  return value === "其它" ? t("flags.other") : value;
+}
+
 /** 秒 → 人类可读时长。 */
 function fmtDuration(seconds) {
-  if (seconds === null || seconds === undefined) return "永久";
+  if (seconds === null || seconds === undefined) return t("misc.permanent");
   let s = Math.max(0, Math.floor(seconds));
   const d = Math.floor(s / 86400);
   s %= 86400;
@@ -61,14 +144,14 @@ function fmtDuration(seconds) {
   s %= 3600;
   const m = Math.floor(s / 60);
   s %= 60;
-  if (d > 0) return `${d} 天 ${h} 小时`;
-  if (h > 0) return `${h} 小时 ${m} 分`;
-  if (m > 0) return `${m} 分 ${s} 秒`;
-  return `${s} 秒`;
+  if (d > 0) return t("dur.days", { d, h });
+  if (h > 0) return t("dur.hours", { h, m });
+  if (m > 0) return t("dur.minutes", { m, s });
+  return t("dur.seconds", { s });
 }
 
 function fmtNumber(n) {
-  return (n === null || n === undefined ? 0 : n).toLocaleString("zh-CN");
+  return (n === null || n === undefined ? 0 : n).toLocaleString(LANG === "en" ? "en-US" : "zh-CN");
 }
 
 /* ---------------- 提示与确认 ---------------- */
@@ -86,7 +169,7 @@ function confirmDialog(title, text, okLabel) {
     const modal = $("modal");
     $("modal-title").textContent = title;
     $("modal-text").textContent = text;
-    $("modal-ok").textContent = okLabel || "确认";
+    $("modal-ok").textContent = okLabel || t("modal.confirm");
     modal.classList.remove("hidden");
 
     const done = (result) => {
@@ -122,7 +205,7 @@ async function apiPost(path, body) {
   return text ? JSON.parse(text) : null;
 }
 
-/** 把服务端返回的错误体转成中文提示。 */
+/** 把服务端返回的错误体转成提示（服务端文案本身是中文，原样展示）。 */
 function describeHttpError(status, text) {
   try {
     const body = JSON.parse(text);
@@ -130,7 +213,9 @@ function describeHttpError(status, text) {
   } catch (_) {
     /* 非 JSON 响应，退回到原始文本 */
   }
-  return text ? `请求失败（${status}）：${text}` : `请求失败（HTTP ${status}）`;
+  return text
+    ? t("err.request", { status, text })
+    : t("err.request_short", { status });
 }
 
 /** 统一的动作包装：失败弹提示，成功提示 + 立即刷新。 */
@@ -156,16 +241,20 @@ const state = {
   config: null,
   adapters: [],
   logs: [],
+  /** `/api/meta` 下发：语言设置为 auto 时用它决定界面语言。 */
+  meta: null,
+  /** 设置页里改了下拉框但还没保存的语言（保存或重载后清空）。 */
+  langPreview: null,
   page: "overview",
   stateTimer: null,
   logTimer: null,
 };
 
 const QUICK_SWITCHES = [
-  { key: "risky_ports", field: "risky_ports", title: "危险端口保护", hint: "拦截 135/137/138/139/445" },
-  { key: "block_icmp", field: "block_icmp", title: "禁止 Ping", hint: "丢弃 ICMP Echo 请求" },
-  { key: "autostart", field: "autostart", title: "开机自动启动", hint: "注册 Windows 服务，开机即防护" },
-  { key: "rdp_guard", field: "rdp_enabled", title: "远程桌面保护", hint: "按客户端计算机名放行" },
+  { key: "risky_ports", field: "risky_ports", title: "sw.risky", hint: "sw.risky_hint" },
+  { key: "block_icmp", field: "block_icmp", title: "sw.icmp", hint: "sw.icmp_hint" },
+  { key: "autostart", field: "autostart", title: "sw.autostart", hint: "sw.autostart_hint" },
+  { key: "rdp_guard", field: "rdp_enabled", title: "sw.rdp", hint: "sw.rdp_hint" },
 ];
 
 /* ---------------- 渲染：顶部状态 ---------------- */
@@ -176,24 +265,24 @@ function renderStatus() {
 
   const runDot = $("chip-run-dot");
   runDot.className = "dot " + (s.running ? "on" : "off");
-  $("chip-run").textContent = s.running ? "保护中" : "已停止";
+  $("chip-run").textContent = s.running ? t("top.running") : t("top.stopped");
 
-  $("chip-adapter").textContent = s.adapter || "未选择";
+  $("chip-adapter").textContent = s.adapter || t("top.adapter_none");
   $("chip-ip").textContent = s.local_ip || "-";
 
   const adminDot = $("chip-admin-dot");
   adminDot.className = "dot " + (s.admin ? "on" : "warn");
-  $("chip-admin").textContent = s.admin ? "管理员" : "权限不足";
+  $("chip-admin").textContent = s.admin ? t("top.admin") : t("top.no_admin");
 
   $("chip-uptime").textContent = fmtDuration(s.stats.uptime_seconds);
 
   $("stat-tracking").textContent = fmtNumber(s.stats.tracking);
   $("stat-banned").textContent = fmtNumber(s.stats.banned);
-  $("stat-banned-foot").textContent = `其中永久 ${fmtNumber(s.stats.permanent)}`;
+  $("stat-banned-foot").textContent = t("ov.banned_foot", { n: fmtNumber(s.stats.permanent) });
   $("stat-ports").textContent = fmtNumber(s.protected_ports);
   $("stat-ports-foot").textContent = protectedPortsText(s);
   $("stat-packets").textContent = fmtNumber(s.stats.captured_packets);
-  $("stat-packets-foot").textContent = `累计封停 ${fmtNumber(s.stats.total_bans)} 次`;
+  $("stat-packets-foot").textContent = t("ov.packets_foot", { n: fmtNumber(s.stats.total_bans) });
   renderIgnoreStats(s);
   renderParseNote(s);
   renderObserve(s);
@@ -205,18 +294,18 @@ function renderStatus() {
   $("btn-start").disabled = s.running;
   $("btn-stop").disabled = !s.running;
 
-  // 地理位置库状态：加载成功给出路径，否则给出原因与放置位置
+  // 地理位置库状态：加载成功给出路径，否则给出原因与放置位置（原因由后端给，中文）
   const geoTip = $("geo-status");
   if (geoTip) {
     const text = s.geo_status || "";
-    geoTip.textContent = s.geo_ready ? `已加载：${text}` : text;
+    geoTip.textContent = s.geo_ready ? t("set.geo_loaded", { path: text }) : text;
     geoTip.className = s.geo_ready ? "muted" : "muted warn";
   }
 
   // 权限不足时给出明确后果提示，而不是等到封停失败
   if (!s.admin && !state.adminWarned) {
     state.adminWarned = true;
-    toast("未以管理员身份运行：抓包与防火墙操作会失败，请重新以管理员身份启动", "warn");
+    toast(t("toast.need_admin"), "warn");
   }
 }
 
@@ -225,18 +314,18 @@ function renderStatus() {
  *  配置尚未取到时退回固定文案（概览页首屏）。 */
 function protectedPortsText(s) {
   const protect = state.config && state.config.protect;
-  if (!protect) return "TCP / TCP-WEB / UDP 合计";
+  if (!protect) return t("ov.ports_foot_default");
   const fmt = (g) => {
     const rule = protect[g] || {};
     const ports = rule.ports || [];
-    if (!ports.length) return "未设置";
+    if (!ports.length) return t("ov.ports_none");
     // 带上备注，让「这个端口是谁在用的」在概览页就能看到
     const notes = rule.notes || {};
     return ports
       .map((p) => (notes[String(p)] ? `${p}(${notes[String(p)]})` : String(p)))
       .join(",");
   };
-  if (!s.protected_ports) return "三组均未设置，不会统计与封停";
+  if (!s.protected_ports) return t("ov.ports_all_empty");
   return `TCP ${fmt("tcp")} · WEB ${fmt("http")} · UDP ${fmt("udp")}`;
 }
 
@@ -246,19 +335,19 @@ function renderIgnoreStats(s) {
   if (!box || !s.stats) return;
   const ig = s.stats.ignored || {};
   const items = [
-    { label: "非本机流量", value: ig.not_local, hint: "混杂模式抓到的同网段其它主机流量" },
-    { label: "本机外连", value: ig.outbound, hint: "本机主动发起，默认不计入阈值" },
-    { label: "非新建连接", value: ig.not_new_connection, hint: "SYN+ACK、纯 ACK、FIN 等过程包" },
-    { label: "端口未保护", value: ig.port_not_protected, hint: "端口不在 TCP / WEB / UDP 三组内" },
-    { label: "ICMP", value: ig.icmp, hint: "只由系统级「禁止 Ping」处理" },
+    { label: "ov.ig_not_local", value: ig.not_local, hint: "ov.ig_not_local_hint" },
+    { label: "ov.ig_outbound", value: ig.outbound, hint: "ov.ig_outbound_hint" },
+    { label: "ov.ig_not_new", value: ig.not_new_connection, hint: "ov.ig_not_new_hint" },
+    { label: "ov.ig_port_unprotected", value: ig.port_not_protected, hint: "ov.ig_port_unprotected_hint" },
+    { label: "ov.ig_icmp", value: ig.icmp, hint: "ov.ig_icmp_hint" },
   ];
   box.textContent = "";
   for (const it of items) {
     box.appendChild(
       el("div", { class: "stat" }, [
-        el("div", { class: "stat-label", text: it.label }),
+        el("div", { class: "stat-label", text: t(it.label) }),
         el("div", { class: "stat-value", text: fmtNumber(it.value || 0) }),
-        el("div", { class: "stat-foot", text: it.hint }),
+        el("div", { class: "stat-foot", text: t(it.hint) }),
       ])
     );
   }
@@ -270,14 +359,13 @@ function renderParseNote(s) {
   if (!box) return;
   const errs = s.parse_errors || 0;
   const samples = s.parse_samples || [];
-  let text = errs
-    ? `解析失败的包 ${fmtNumber(errs)} 个（非 IPv4 / 分片 / 畸形包）`
-    : "解析失败的包 0 个";
+  // 样本说明由抓包层生成（中文），原样附在后面，不做翻译
+  let text = errs ? t("ov.parse_some", { n: fmtNumber(errs) }) : t("ov.parse_zero");
   if (s.count_accept) {
-    text += "；当前按「服务端握手响应（SYN+ACK）」统计连接事件";
+    text += t("ov.parse_count_accept");
   }
   if (samples.length) {
-    text += `。样本：${samples.join(" | ")}`;
+    text += t("ov.parse_samples", { s: samples.join(" | ") });
   }
   box.textContent = text;
 }
@@ -293,11 +381,9 @@ function renderObserve(s) {
       el("tr", {}, [
         el("td", { colspan: "5" }, [
           el("div", { class: "empty" }, [
-            el("strong", { text: s.running ? "还没抓到任何包" : "保护未启动" }),
+            el("strong", { text: s.running ? t("ov.obs_empty_running") : t("ov.obs_empty_stopped") }),
             el("span", {
-              text: s.running
-                ? "先发起一次连接，再回来看这里出现了哪个端口"
-                : "点击「开始保护」后才能看到实际抓到的包",
+              text: s.running ? t("ov.obs_empty_running_hint") : t("ov.obs_empty_stopped_hint"),
             }),
           ]),
         ]),
@@ -307,10 +393,12 @@ function renderObserve(s) {
   }
   for (const o of rows) {
     const row = el("tr");
-    row.appendChild(el("td", {}, [el("span", { class: "badge group", text: o.direction })]));
+    row.appendChild(
+      el("td", {}, [el("span", { class: "badge group", text: directionText(o.direction) })])
+    );
     row.appendChild(el("td", { class: "mono", text: o.protocol }));
     row.appendChild(el("td", { class: "mono", text: String(o.port) }));
-    row.appendChild(el("td", { class: "mono", text: o.flags }));
+    row.appendChild(el("td", { class: "mono", text: flagsText(o.flags) }));
     row.appendChild(el("td", { class: "mono", text: fmtNumber(o.count) }));
     body.appendChild(row);
   }
@@ -333,7 +421,7 @@ function renderQuickSwitches() {
         ev.target.disabled = true;
         await run(
           () => apiPost("/api/protection", { key: item.key, enabled }),
-          `${item.title}已${enabled ? "开启" : "关闭"}`
+          t(enabled ? "toast.switched_on" : "toast.switched_off", { name: t(item.title) })
         );
         ev.target.disabled = false;
       },
@@ -343,8 +431,8 @@ function renderQuickSwitches() {
       el("label", { class: "switch" }, [
         input,
         el("span", { class: "switch-text" }, [
-          el("b", { text: item.title }),
-          el("span", { text: item.hint }),
+          el("b", { text: t(item.title) }),
+          el("span", { text: t(item.hint) }),
         ]),
       ])
     );
@@ -359,8 +447,8 @@ function renderEvents() {
   if (!state.events.length) {
     box.appendChild(
       el("div", { class: "empty" }, [
-        el("strong", { text: "暂无事件" }),
-        el("span", { text: "发生封停、解封或系统提示时会显示在这里" }),
+        el("strong", { text: t("ov.events_empty") }),
+        el("span", { text: t("ov.events_empty_hint") }),
       ])
     );
     return;
@@ -407,9 +495,9 @@ function renderConnections() {
       el("tr", {}, [
         el("td", { colspan: "9" }, [
           el("div", { class: "empty" }, [
-            el("strong", { text: keyword ? "没有匹配的记录" : "当前没有跟踪中的连接" }),
+            el("strong", { text: keyword ? t("conn.no_match") : t("conn.empty") }),
             el("span", {
-              text: keyword ? "请调整筛选条件" : "抓到受保护端口的新连接请求后会出现在这里",
+              text: keyword ? t("conn.no_match_hint") : t("conn.empty_hint"),
             }),
           ]),
         ]),
@@ -424,12 +512,12 @@ function renderConnections() {
 
     const row = el("tr", { class: c.whitelisted ? "whitelisted" : "" });
     row.appendChild(el("td", { class: "mono" }, [c.ip, noteTag(c.ip_note)]));
-    row.appendChild(el("td", { class: "muted", text: c.location || "未知" }));
+    row.appendChild(el("td", { class: "muted", text: c.location || t("misc.unknown") }));
     row.appendChild(el("td", {}, [el("span", { class: "badge group", text: c.group })]));
     row.appendChild(el("td", { class: "mono" }, [String(c.service_port), noteTag(c.port_note)]));
     row.appendChild(
       el("td", {
-        title: `累计连接 ${c.count} 次，达到阈值 ${c.threshold} 次即封停`,
+        title: t("conn.meter_title", { count: c.count, threshold: c.threshold }),
       }, [
         el("div", { class: "meter" }, [
           el("div", { class: "meter-track" }, [
@@ -453,17 +541,17 @@ function renderConnections() {
           banned
             ? el("button", {
                 class: "btn sm",
-                text: "解封",
+                text: t("btn.unban"),
                 onclick: () => unban(c.ip),
               })
             : el("button", {
                 class: "btn sm danger",
-                text: "封停",
+                text: t("btn.ban"),
                 onclick: () => banIp(c.ip, true),
               }),
           el("button", {
             class: "btn sm",
-            text: "加白名单",
+            text: t("btn.whitelist"),
             onclick: () => whitelistAdd(c.ip),
           }),
         ]),
@@ -475,14 +563,24 @@ function renderConnections() {
 
 function stateBadge(c) {
   if (c.whitelisted || c.state === "WHITELIST") {
-    return el("span", { class: "badge whitelist", text: "白名单" });
+    return el("span", { class: "badge whitelist", text: t("badge.whitelist") });
   }
-  if (c.state === "PERMANENT") return el("span", { class: "badge permanent", text: "永久封停" });
-  if (c.state === "BANNED") return el("span", { class: "badge banned", text: "已封停" });
-  return el("span", { class: "badge tracking", text: "跟踪中" });
+  if (c.state === "PERMANENT") {
+    return el("span", { class: "badge permanent", text: t("badge.permanent") });
+  }
+  if (c.state === "BANNED") return el("span", { class: "badge banned", text: t("badge.banned") });
+  return el("span", { class: "badge tracking", text: t("badge.tracking") });
 }
 
 /* ---------------- 渲染：封停表 ---------------- */
+
+/** 封停原因：优先按后端下发的稳定标识（blacklist / tcp_threshold / …）取当前语言文案，
+ *  标识认不出时退回后端给的中文文案，绝不显示成空单元格。 */
+function reasonText(b) {
+  const key = "reason." + (b.reason || "");
+  if ((window.PG_I18N || {})[key]) return t(key);
+  return b.reason_label || b.reason || "";
+}
 
 function renderBans() {
   const body = $("tbody-bans");
@@ -492,8 +590,8 @@ function renderBans() {
       el("tr", {}, [
         el("td", { colspan: "10" }, [
           el("div", { class: "empty" }, [
-            el("strong", { text: "封停列表为空" }),
-            el("span", { text: "没有地址被拦截" }),
+            el("strong", { text: t("bans.empty") }),
+            el("span", { text: t("bans.empty_hint") }),
           ]),
         ]),
       ])
@@ -504,8 +602,8 @@ function renderBans() {
   for (const b of state.bans) {
     const row = el("tr", { class: "banned" });
     row.appendChild(el("td", { class: "mono" }, [b.ip, noteTag(b.ip_note)]));
-    row.appendChild(el("td", { class: "muted", text: b.location || "未知" }));
-    row.appendChild(el("td", { text: b.reason_label || b.reason }));
+    row.appendChild(el("td", { class: "muted", text: b.location || t("misc.unknown") }));
+    row.appendChild(el("td", { text: reasonText(b) }));
     row.appendChild(el("td", { class: "mono", text: b.protocol || "-" }));
     row.appendChild(
       el("td", { class: "mono" }, [
@@ -518,15 +616,19 @@ function renderBans() {
     row.appendChild(
       el("td", {
         class: "mono",
-        text: b.permanent ? "永久" : fmtDuration(b.remaining_seconds),
+        text: b.permanent ? t("misc.permanent") : fmtDuration(b.remaining_seconds),
       })
     );
     row.appendChild(el("td", { class: "mono muted", text: b.rule_name }));
     row.appendChild(
       el("td", {}, [
         el("div", { class: "form-actions" }, [
-          el("button", { class: "btn sm", text: "解封", onclick: () => unban(b.ip) }),
-          el("button", { class: "btn sm", text: "加白名单", onclick: () => whitelistAdd(b.ip) }),
+          el("button", { class: "btn sm", text: t("btn.unban"), onclick: () => unban(b.ip) }),
+          el("button", {
+            class: "btn sm",
+            text: t("btn.whitelist"),
+            onclick: () => whitelistAdd(b.ip),
+          }),
         ]),
       ])
     );
@@ -554,7 +656,7 @@ function renderLogs() {
     );
   }
   if (!rows.length) {
-    box.appendChild(el("div", { class: "muted", text: "暂无日志" }));
+    box.appendChild(el("div", { class: "muted", text: t("log.empty") }));
   }
   if ($("log-autoscroll").checked) box.scrollTop = box.scrollHeight;
 }
@@ -565,9 +667,9 @@ function renderLogs() {
 // TCP-WEB 阈值远高于普通 TCP，一次页面访问要连带 CSS / JS / 图片等数十个连接，
 // 阈值过低会把正常访客秒封。
 const PROTECT_GROUPS = [
-  { key: "tcp", name: "TCP 保护端口", hint: "普通 TCP 服务", max_attempts: 5 },
-  { key: "http", name: "TCP-WEB 端口", hint: "Web 类服务，阈值可放宽", max_attempts: 300 },
-  { key: "udp", name: "UDP 保护端口", hint: "UDP 服务", max_attempts: 5 },
+  { key: "tcp", name: "g.tcp", hint: "g.tcp_hint", max_attempts: 5 },
+  { key: "http", name: "g.http", hint: "g.http_hint", max_attempts: 300 },
+  { key: "udp", name: "g.udp", hint: "g.udp_hint", max_attempts: 5 },
 ];
 
 /* ---------------- 备注编辑（纯展示字段，不参与判定） ----------------
@@ -628,7 +730,7 @@ function renderNoteGrid(box, scope, keys) {
   box.textContent = "";
   if (!keys.length) {
     box.appendChild(
-      el("div", { class: "muted note-empty", text: "填写端口 / 规则后，这里会逐条出现备注输入框" })
+      el("div", { class: "muted note-empty", text: t("note.empty") })
     );
     return;
   }
@@ -638,7 +740,7 @@ function renderNoteGrid(box, scope, keys) {
       class: "note-input",
       maxlength: "64",
       value: noteCache[noteKey(scope, key)] || "",
-      placeholder: "备注：谁在用 / 哪个业务",
+      placeholder: t("note.placeholder"),
     });
     input.addEventListener("input", () => cacheNote(scope, key, input.value.trim()));
     box.appendChild(
@@ -658,6 +760,8 @@ function renderSettings() {
   noteCache = {};
   loadNotes("lists", cfg.lists.notes);
 
+  // 语言下拉框显示「未保存的预览值」，没有预览时才回落到磁盘上的配置
+  $("cfg-language").value = state.langPreview || cfg.panel.language;
   $("cfg-bind").value = cfg.panel.bind;
   $("cfg-ban-duration").value = cfg.ban.duration_seconds;
   $("cfg-ban-permanent").checked = cfg.ban.permanent;
@@ -682,28 +786,28 @@ function renderSettings() {
     const ports = el("input", {
       type: "text",
       value: (rule.ports || []).join(","),
-      placeholder: "如 3389,22",
+      placeholder: t("set.ports_ph"),
       "data-group": g.key,
       "data-field": "ports",
-      title: g.hint,
+      title: t(g.hint),
     });
     // 端口一改就重建备注网格；只重建网格容器，输入框本身不重渲染，焦点不丢
     ports.addEventListener("input", () => renderNoteGrid(grid, g.key, portNoteKeys(g.key)));
 
     box.appendChild(
       el("div", { class: "port-row" }, [
-        el("span", { class: "port-name", text: g.name }),
+        el("span", { class: "port-name", text: t(g.name) }),
         ports,
-        el("span", { class: "muted", text: "累计连接" }),
+        el("span", { class: "muted", text: t("set.accumulated") }),
         el("input", {
           type: "number",
           min: "1",
           value: rule.max_attempts,
           "data-group": g.key,
           "data-field": "max_attempts",
-          title: "累计连接次数达到该值即封停；该来源空闲 10 分钟后计数归零",
+          title: t("set.attempts_title"),
         }),
-        el("span", { class: "muted", text: "次即封停" }),
+        el("span", { class: "muted", text: t("set.then_ban") }),
         grid,
       ])
     );
@@ -718,9 +822,9 @@ function renderSettings() {
   const sw = $("system-switches");
   sw.textContent = "";
   const sysItems = [
-    { field: "risky_ports", title: "危险端口保护", hint: "135/137/138/139/445" },
-    { field: "block_icmp", title: "禁止 Ping", hint: "丢弃 ICMP Echo 请求" },
-    { field: "autostart", title: "开机自动启动", hint: "注册 Windows 服务（由 SCM 开机拉起）" },
+    { field: "risky_ports", title: "sw.risky", hint: "sw.risky_hint" },
+    { field: "block_icmp", title: "sw.icmp", hint: "sw.icmp_hint" },
+    { field: "autostart", title: "sw.autostart", hint: "sw.autostart_hint_settings" },
   ];
   for (const item of sysItems) {
     const input = el("input", { type: "checkbox", "data-system": item.field });
@@ -729,14 +833,67 @@ function renderSettings() {
       el("label", { class: "switch" }, [
         input,
         el("span", { class: "switch-text" }, [
-          el("b", { text: item.title }),
-          el("span", { text: item.hint }),
+          el("b", { text: t(item.title) }),
+          el("span", { text: t(item.hint) }),
         ]),
       ])
     );
   }
 
   renderAdapterOptions();
+}
+
+/** 语言切换后只刷新设置页里由脚本生成的文案。
+ *
+ *  不能在这里直接 renderSettings()：那是从 state.config 重建整张表单，
+ *  会把用户正在编辑、还没保存的内容（端口、名单、备注输入框里的字）全部冲掉，
+ *  与历史上「改一处设置丢了另一处」的故障同类。 */
+function retranslateSettings() {
+  if (!$("notes-whitelist") || !$("system-switches")) return;
+
+  PROTECT_GROUPS.forEach((g, i) => {
+    const row = $("protect-rows").querySelectorAll(".port-row")[i];
+    if (!row) return;
+    const name = row.querySelector(".port-name");
+    if (name) name.textContent = t(g.name);
+    // 两个 .muted 依次是「累计连接」「次即封停」（网格里的空态占位排在其后）
+    const muted = row.querySelectorAll(".muted");
+    if (muted[0]) muted[0].textContent = t("set.accumulated");
+    if (muted[1]) muted[1].textContent = t("set.then_ban");
+    const ports = row.querySelector('[data-field="ports"]');
+    if (ports) {
+      ports.placeholder = t("set.ports_ph");
+      ports.title = t(g.hint);
+    }
+    const attempts = row.querySelector('[data-field="max_attempts"]');
+    if (attempts) attempts.title = t("set.attempts_title");
+    const grid = row.querySelector(".note-grid");
+    if (grid) renderNoteGrid(grid, g.key, portNoteKeys(g.key));
+  });
+
+  renderNoteGrid($("notes-whitelist"), "lists", ruleNoteKeys("cfg-whitelist"));
+  renderNoteGrid($("notes-blacklist"), "lists", ruleNoteKeys("cfg-blacklist"));
+
+  const sysKeys = {
+    risky_ports: ["sw.risky", "sw.risky_hint"],
+    block_icmp: ["sw.icmp", "sw.icmp_hint"],
+    autostart: ["sw.autostart", "sw.autostart_hint_settings"],
+  };
+  for (const input of $("system-switches").querySelectorAll("[data-system]")) {
+    const item = sysKeys[input.getAttribute("data-system")];
+    if (!item) continue;
+    const label = input.parentElement;
+    const title = label.querySelector(".switch-text > b");
+    const hint = label.querySelector(".switch-text > span");
+    if (title) title.textContent = t(item[0]);
+    if (hint) hint.textContent = t(item[1]);
+  }
+
+  // 网卡下拉框只能整体重建，先把「已选但未保存」的选择记下来再复原
+  const select = $("cfg-adapter");
+  const picked = select.value;
+  renderAdapterOptions();
+  if (picked && select.querySelector(`option[value="${picked}"]`)) select.value = picked;
 }
 
 function renderAdapterOptions() {
@@ -747,17 +904,22 @@ function renderAdapterOptions() {
   const usable = state.adapters.filter((a) => a.usable);
   if (!usable.length) {
     select.appendChild(
-      el("option", { value: "", text: state.adapters.length ? "没有可用网卡" : "读取中…" })
+      el("option", {
+        value: "",
+        text: state.adapters.length ? t("set.adapter_none") : t("set.adapter_loading"),
+      })
     );
   }
   for (const a of usable) {
-    const label = `${a.ip}${a.is_virtual ? "（虚拟）" : ""} · ${a.description}`;
+    const label = `${a.ip}${a.is_virtual ? t("set.adapter_virtual") : ""} · ${a.description}`;
     select.appendChild(el("option", { value: a.ip, text: label }));
   }
   select.value = current;
   if (select.value !== current && current) {
     // 配置里的网卡当前不在列表中（已拔网线等），保留为可选项以免保存时被清空
-    select.appendChild(el("option", { value: current, text: `${current}（当前配置，未在列表）` }));
+    select.appendChild(
+      el("option", { value: current, text: `${current}${t("set.adapter_missing")}` })
+    );
     select.value = current;
   }
 }
@@ -766,6 +928,8 @@ function renderAdapterOptions() {
 function collectSettings() {
   const base = JSON.parse(JSON.stringify(state.config));
   base.panel.bind = $("cfg-bind").value.trim();
+  // 界面语言必须写回：整份配置提交时缺了它会被后端按字段默认值当成 auto
+  base.panel.language = $("cfg-language").value;
   base.ban.duration_seconds = Number($("cfg-ban-duration").value) || 0;
   base.ban.permanent = $("cfg-ban-permanent").checked;
   base.lists.whitelist = splitLines($("cfg-whitelist").value);
@@ -820,7 +984,7 @@ function collectPorts(group) {
   for (const p of parts) {
     const n = Number(p);
     if (!Number.isInteger(n) || n < 1 || n > 65535) {
-      return { ports: null, error: `端口「${p}」非法：必须是 1-65535 之间的整数` };
+      return { ports: null, error: t("err.port_invalid", { port: p }) };
     }
     ports.push(n);
   }
@@ -839,8 +1003,8 @@ function showSettingsErrors(errors) {
   if (!list.length) return;
   box.appendChild(
     el("div", { class: "errors" }, [
-      el("b", { text: "保存失败" }),
-      el("ul", {}, list.map((t) => el("li", { text: t }))),
+      el("b", { text: t("err.save_title") }),
+      el("ul", {}, list.map((text) => el("li", { text }))),
     ])
   );
 }
@@ -849,32 +1013,35 @@ function showSettingsErrors(errors) {
 
 async function banIp(ip, permanent) {
   const ok = await confirmDialog(
-    "封停地址",
-    `确定要封停 ${ip} 吗？程序会为该地址创建一条防火墙入站拦截规则。`,
-    "封停"
+    t("modal.ban_title"),
+    t("modal.ban_text", { ip }),
+    t("modal.ban_ok")
   );
   if (!ok) return;
-  await run(() => apiPost("/api/ban", { ip, permanent }), `${ip} 已封停`);
+  await run(() => apiPost("/api/ban", { ip, permanent }), t("toast.banned", { ip }));
 }
 
 async function unban(ip) {
   const ok = await confirmDialog(
-    "解除封停",
-    `确定要解除对 ${ip} 的封停并删除对应防火墙规则吗？`,
-    "解封"
+    t("modal.unban_title"),
+    t("modal.unban_text", { ip }),
+    t("modal.unban_ok")
   );
   if (!ok) return;
-  await run(() => apiPost("/api/unban", { ip }), `${ip} 已解封`);
+  await run(() => apiPost("/api/unban", { ip }), t("toast.unbanned", { ip }));
 }
 
 async function whitelistAdd(ip) {
   const ok = await confirmDialog(
-    "加入白名单",
-    `${ip} 将被加入白名单并立即解封。白名单地址永远不会被自动或手动封停。`,
-    "加入白名单"
+    t("modal.whitelist_title"),
+    t("modal.whitelist_text", { ip }),
+    t("modal.whitelist_ok")
   );
   if (!ok) return;
-  await run(() => apiPost("/api/lists/add", { kind: "whitelist", rule: ip }), `${ip} 已加入白名单`);
+  await run(
+    () => apiPost("/api/lists/add", { kind: "whitelist", rule: ip }),
+    t("toast.whitelisted", { ip })
+  );
 }
 
 /* ---------------- 数据刷新 ---------------- */
@@ -912,18 +1079,37 @@ async function refreshAdapters() {
     state.adapters = await apiGet("/api/adapters");
     if (state.page === "settings") renderAdapterOptions();
   } catch (e) {
-    toast("读取网卡列表失败：" + e.message, "err");
+    toast(t("toast.adapter_failed", { msg: e.message }), "err");
   }
+}
+
+/** 取面板元信息：语言设置为 auto 时靠它决定界面语言，同时拿日志文件路径。 */
+async function refreshMeta() {
+  try {
+    state.meta = await apiGet("/api/meta");
+    renderLogPath();
+  } catch (_) {
+    /* 元信息缺失不影响主流程，语言退回中文 */
+  }
+}
+
+/** 日志文件路径（带语言前缀），元信息没取到时留空。 */
+function renderLogPath() {
+  if (state.meta) $("log-path").textContent = t("log.path", { path: state.meta.log_file });
 }
 
 async function loadSettings() {
   try {
     showSettingsErrors(null);
     state.config = await apiGet("/api/config");
+    // 进设置页 / 放弃修改都从磁盘重来：未保存的语言预览作废
+    state.langPreview = null;
+    LANG = effectiveLanguage();
+    applyI18n();
     await refreshAdapters();
     renderSettings();
   } catch (e) {
-    showSettingsErrors(["读取配置失败：" + e.message]);
+    showSettingsErrors([t("err.load_config", { msg: e.message })]);
   }
 }
 
@@ -954,21 +1140,17 @@ function bindEvents() {
   });
 
   $("btn-start").addEventListener("click", () =>
-    run(() => apiPost("/api/start"), "已开始保护")
+    run(() => apiPost("/api/start"), t("toast.started"))
   );
   $("btn-stop").addEventListener("click", async () => {
-    const ok = await confirmDialog(
-      "停止保护",
-      "停止后不再抓包，已有封停记录与防火墙规则会保留。确定要停止吗？",
-      "停止保护"
-    );
-    if (ok) await run(() => apiPost("/api/stop"), "已停止保护");
+    const ok = await confirmDialog(t("modal.stop_title"), t("modal.stop_text"), t("modal.stop_ok"));
+    if (ok) await run(() => apiPost("/api/stop"), t("toast.stopped"));
   });
 
   $("btn-manual-ban").addEventListener("click", async () => {
     const ip = $("manual-ip").value.trim();
     if (!ip) {
-      toast("请先填写要封停的 IP", "warn");
+      toast(t("bans.need_ip"), "warn");
       return;
     }
     await banIp(ip, $("manual-permanent").checked);
@@ -977,6 +1159,12 @@ function bindEvents() {
 
   $("filter-connections").addEventListener("input", renderConnections);
   $("log-filter").addEventListener("change", renderLogs);
+
+  // 语言下拉框：改了就立即按这个还没保存的选择预览，保存后才写进配置
+  $("cfg-language").addEventListener("change", () => {
+    state.langPreview = $("cfg-language").value;
+    applyLanguage();
+  });
 
   // 名单一改就重建该名单的备注网格（端口输入框是动态创建的，监听在渲染时挂）
   $("cfg-whitelist").addEventListener("input", () =>
@@ -989,7 +1177,7 @@ function bindEvents() {
   $("btn-adapters-refresh").addEventListener("click", refreshAdapters);
   $("btn-reload").addEventListener("click", () => {
     loadSettings();
-    toast("已重新载入配置", "ok");
+    toast(t("toast.reloaded"), "ok");
   });
 
   $("btn-save").addEventListener("click", async () => {
@@ -1001,22 +1189,27 @@ function bindEvents() {
     }
     if (errors.length) {
       showSettingsErrors(errors);
-      toast("请先修正表单中的错误", "err");
+      toast(t("toast.fix_errors"), "err");
       return;
     }
 
     const cfg = collectSettings();
     const btn = $("btn-save");
     btn.disabled = true;
-    $("save-hint").textContent = "保存中…";
+    $("save-hint").textContent = t("set.saving");
     try {
       state.config = await apiPost("/api/config", cfg);
+      // 语言可能刚改过：预览作废，按新配置（auto 时再取一次服务器语言）重解析
+      state.langPreview = null;
+      await refreshMeta();
+      LANG = effectiveLanguage();
+      applyI18n();
       renderSettings();
-      toast("设置已保存并生效", "ok");
-      $("save-hint").textContent = "已保存";
+      toast(t("toast.saved"), "ok");
+      $("save-hint").textContent = t("set.saved");
     } catch (e) {
       showSettingsErrors([e.message]);
-      toast("保存失败", "err");
+      toast(t("toast.save_failed"), "err");
       $("save-hint").textContent = "";
     } finally {
       btn.disabled = false;
@@ -1050,22 +1243,25 @@ function stopTimers() {
 
 async function boot() {
   bindEvents();
+  // 元信息先取：语言设置为 auto 时界面语言由它决定，必须在首次渲染前拿到，
+  // 否则英文环境会先闪一下中文
+  await refreshMeta();
+  LANG = effectiveLanguage();
+  applyI18n();
   await refreshState();
   // 概览页的「受保护端口」明细需要配置，先取一次；
   // 失败不回退整个页面，只让明细行保持默认文案。
   try {
     state.config = await apiGet("/api/config");
+    // 配置到手后语言才有准（auto 的判定依赖 meta，这里只需重刷一次文案）
+    LANG = effectiveLanguage();
+    applyI18n();
     renderStatus();
   } catch (_) {
     /* 配置读取失败不影响概览其余部分 */
   }
   await refreshAdapters();
-  try {
-    const meta = await apiGet("/api/meta");
-    $("log-path").textContent = "日志文件：" + meta.log_file;
-  } catch (_) {
-    /* 元信息缺失不影响主流程 */
-  }
+  renderLogPath();
   startTimers();
 }
 

@@ -194,6 +194,8 @@ fn run_app(opts: cli::Options) -> i32 {
         // 面板展示的是配置/封停/日志所在的根目录，不是给 IP 库预留的 data/ 子目录
         data_dir: paths.root().display().to_string(),
         started_at_ms: rt.started_at_ms(),
+        // 面板语言设置为「跟随系统」时用它决定界面文案（中 / 英）
+        system_language: portguard_win::system_language().to_string(),
     };
     let mut server = if opts.panel && cfg.panel.enabled {
         start_panel(api, meta, &cfg, Arc::clone(&logger))

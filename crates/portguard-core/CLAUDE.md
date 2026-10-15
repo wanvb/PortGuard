@@ -11,7 +11,7 @@
 | 模块 | pub 类型 / 关键函数 | 说明 |
 |------|------|------|
 | `model` | `Ip`（= `Ipv4Addr`）、`Protocol`、`TrafficDirection`、`PortGroup`、`TcpFlags`、`FlagClass`、`PacketInfo`、`BanReason`、`BanRecord`、`IgnoreCounters`、`Statistics` | 领域数据结构与 `Display`/`label`/`as_str` 辅助；`Statistics.ignored` 承载被丢弃数据包的分类计数；`TcpFlags::is_connection_request`（入站 SYN）与 `is_handshake_accepted`（出站 SYN+ACK）是两种连接事件来源 |
-| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`DEFAULT_PANEL_BIND`、`DEFAULT_WEB_MAX_ATTEMPTS`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/migrate/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（**默认 `true`**，规范 4.1 修订）；`ProtectionRule.notes` / `ListsConfig.notes` 是纯展示备注（键为端口十进制字符串 / 规则原文），取用走 `ProtectionRule::note`、`ProtectConfig::port_note` / `port_note_any`、`ListsConfig::rule_note`；`DEFAULT_PANEL_BIND = "127.0.0.1:58080"`；`DEFAULT_WEB_MAX_ATTEMPTS = 300`（TCP-WEB 默认阈值，规范 4.2） |
+| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`DEFAULT_PANEL_BIND`、`DEFAULT_WEB_MAX_ATTEMPTS`、`CURRENT_CONFIG_VERSION`、`LANGUAGE_AUTO` / `LANGUAGE_ZH` / `LANGUAGE_EN` / `LANGUAGES` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/migrate/validate/has_any_protected_port`；`PanelConfig.language` 是界面语言设置（`auto` / `zh` / `en`，**默认 `auto`**），解析走 `PanelConfig::effective_language(system_default)`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（**默认 `true`**，规范 4.1 修订）；`ProtectionRule.notes` / `ListsConfig.notes` 是纯展示备注（键为端口十进制字符串 / 规则原文），取用走 `ProtectionRule::note`、`ProtectConfig::port_note` / `port_note_any`、`ListsConfig::rule_note`；`DEFAULT_PANEL_BIND = "127.0.0.1:58080"`；`DEFAULT_WEB_MAX_ATTEMPTS = 300`（TCP-WEB 默认阈值，规范 4.2） |
 | `notes` | `Notes`、`MAX_NOTE_CHARS`、`clean`、`normalize`、`get` | 端口 / 名单规则的备注：纯展示元数据，不参与任何判定；`normalize` 负责清洗、丢弃空备注并清除「键已不在端口 / 名单里」的孤儿备注 |
 | `observe` | `Observer`、`Observation`、`MAX_ENTRIES`、`direction_label` | 纯诊断的抓包观测表：按「方向 + 协议 + 本机端口 + 标志类别」计数，`observe` / `top` / `count_matching` / `clear` / `overflow` |
 | `iprange` | `IpRange`、`IpSet`、`parse_ipv4`、`u32_to_ip` | 支持单 IP / 区间 / 末段通配 / CIDR / 多段通配；`IpSet::from_rules` 任一条非法即整体失败 |
@@ -42,6 +42,7 @@
 - `Config::default()` 与 `Config::with_defaults()` 必须同源：`#[serde(default)]` 在局部配置或旧配置文件缺失字段时走的即是此默认值，若给空端口会静默失去保护能力。
 - **面板默认端口唯一来源是 `DEFAULT_PANEL_BIND`（`127.0.0.1:58080`）**：`portguard-web` 的 `DEFAULT_BIND` 直接引用它，不得另写字面量。旧默认值 `127.0.0.1:18080` 由 `Config::migrate()` 迁移（结构版本 1 → 2，18080 是各类本地调试工具的常用端口，冲突概率高），迁移与 `normalize` **分开**：`migrate` 只改内存并返回中文说明清单，是否落盘由 `portguard-app` 在启动时决定（必须落盘，否则第二个实例会照文件里的旧端口去开面板）。凡是仍等于旧默认值的配置一律迁移，刻意保留 18080 的写法不再支持。
 - **TCP-WEB 默认阈值唯一来源是 `DEFAULT_WEB_MAX_ATTEMPTS`（300，结构版本 3 起）**：旧默认值 10 由 `Config::migrate()` 放宽（一次页面访问会连带 CSS / JS / 图片等数十个连接，10 会把正常访客秒封，规范 4.2）。不得把该值改回低位，也不得让 TCP / UDP 组跟着放宽——普通 TCP 服务（如 RDP）仍然 `5`。迁移判定按**值**而非结构版本：`normalize` 早于 `migrate` 执行并把 `config_version` 抬到当前版本，按版本判定永远命中不了。
+- **界面语言只影响面板文案**：`PanelConfig.language` 与判定、封停、规则名、日志、事件流内容均无关，只由 `portguard-web` 在 `/api/meta` 里解析下发（`auto` → 服务器系统语言，取不到按中文），因此改语言无需重启。取值只允许 `auto` / `zh` / `en`，`Config::normalize` 用私有 `normalize_language` 清洗（trim + 小写，不在 `LANGUAGES` 内一律回落到 `auto`），非法值不得原样留在文件里；旧配置缺该字段由 `#[serde(default)]` 补成 `auto`，不需要迁移分支。
 - `GeoConfig` 只控制「是否展示地理位置」与「库文件名」，**不得**参与任何判定；库文件缺失时程序必须照常工作（规范 22）。旧版数据文件（`config.dat` / `BanData.bin`）已永久放弃，不得在配置中留兼容字段或别名。
 - IP 匹配比较阶段统一用 `u32`，禁止逐包做字符串切割（规范 21）；`IpSet::from_rules` 任一条非法即整体失败，避免静默丢规则。
 - 时间不得用 `SystemTime` 直接参与逻辑，一律以调用方注入的 `now_ms` 表达，保证引擎与跟踪器可单测。
@@ -49,11 +50,11 @@
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。
-- 分布：`ban.rs` 11、`config.rs` 20、`engine.rs` 31、`iprange.rs` 11、`logging.rs` 5、`notes.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
-- 合计 `#[test]`：102 个。
+- 分布：`ban.rs` 11、`config.rs` 23、`engine.rs` 31、`iprange.rs` 11、`logging.rs` 5、`notes.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
+- 合计 `#[test]`：105 个。
 - 关键用例：
   - `ban`：白名单地址手动封停同样被拒绝、永久封停不会被临时封停降级、恢复时丢弃白名单记录并可用到期回收清理防火墙、规则名前缀可识别归属。
-  - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝、旧默认面板端口被迁移到新端口（迁移幂等且会如实上报）、旧默认的 TCP-WEB 阈值被放宽（自定义阈值与 TCP / UDP 组不受影响）、备注随配置往返且空备注不落盘、端口或名单规则被删掉后备注不残留、旧配置缺少备注字段也能解析、按分组与按端口取备注。
+  - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝、旧默认面板端口被迁移到新端口（迁移幂等且会如实上报）、旧默认的 TCP-WEB 阈值被放宽（自定义阈值与 TCP / UDP 组不受影响）、备注随配置往返且空备注不落盘、端口或名单规则被删掉后备注不残留、旧配置缺少备注字段也能解析、按分组与按端口取备注、界面语言默认跟随系统且非法值被清洗（`klingon` → `auto`）、旧配置缺少语言字段时跟随系统、语言设置随配置往返。
   - `notes`：清洗去掉空白与换行、超长备注按字符截断且不切碎中文、端口被删掉后备注一并清除、空备注不留在表里、空串视为没有备注。
   - `engine`：白名单优先于黑名单、累计达到阈值即封停、累计计数不因时间间隔归零、入站口径（`count_accept = false`）下握手响应不算新连接、默认配置下入站 SYN 不再计数、打开后出站 SYN+ACK 计一次、两种事件来源互斥不会重复计数（阈值不折半）、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
   - `observe`：入站与出站分别归类、同键累计次数、条目上限不会无限增长、可按条件统计服务端口、非本机流量归入端口零。

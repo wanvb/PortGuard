@@ -8,6 +8,9 @@
     <link rel="stylesheet" href="/assets/style.css" />
   </head>
   <body>
+    <!-- 界面文案全部走 data-i18n（键对应 i18n.js），此处的中文是默认值兼无脚本时的兜底。
+         带子元素的节点（如「标题 + small 副标」）只在文字外面包一层 span，
+         避免 textContent 替换把子元素一起吃掉。 -->
     <div class="app">
       <!-- 顶部横排导航 + 状态条：笔记本窄屏下不再占用左右空间，
            整页宽度全部留给数据表，避免横向滚动 -->
@@ -30,26 +33,28 @@
             </svg>
             <div>
               <div class="brand-name">PortGuard</div>
-              <div class="brand-sub">端口守卫</div>
+              <div class="brand-sub" data-i18n="app.brand_sub">端口守卫</div>
             </div>
           </div>
 
           <nav class="nav">
-            <button class="nav-item active" data-page="overview">概览</button>
+            <button class="nav-item active" data-page="overview" data-i18n="nav.overview">概览</button>
             <button class="nav-item" data-page="connections">
-              当前连接<span class="nav-badge" id="badge-connections">0</span>
+              <span data-i18n="nav.connections">当前连接</span>
+              <span class="nav-badge" id="badge-connections">0</span>
             </button>
             <button class="nav-item" data-page="bans">
-              封停列表<span class="nav-badge" id="badge-bans">0</span>
+              <span data-i18n="nav.bans">封停列表</span>
+              <span class="nav-badge" id="badge-bans">0</span>
             </button>
-            <button class="nav-item" data-page="settings">设置</button>
-            <button class="nav-item" data-page="logs">运行日志</button>
+            <button class="nav-item" data-page="settings" data-i18n="nav.settings">设置</button>
+            <button class="nav-item" data-page="logs" data-i18n="nav.logs">运行日志</button>
           </nav>
 
           <div class="form-actions">
-            <button class="btn primary" id="btn-start">开始保护</button>
-            <button class="btn" id="btn-stop">停止保护</button>
-            <button class="btn" id="btn-refresh">立即刷新</button>
+            <button class="btn primary" id="btn-start" data-i18n="top.start">开始保护</button>
+            <button class="btn" id="btn-stop" data-i18n="top.stop">停止保护</button>
+            <button class="btn" id="btn-refresh" data-i18n="top.refresh">立即刷新</button>
           </div>
         </div>
 
@@ -57,19 +62,25 @@
           <div class="chips">
             <span class="chip">
               <i class="dot" id="chip-run-dot"></i>
-              状态 <b id="chip-run">未知</b>
+              <span data-i18n="top.status">状态</span> <b id="chip-run">未知</b>
             </span>
-            <span class="chip">网卡 <code id="chip-adapter">-</code></span>
-            <span class="chip">本机 IP <code id="chip-ip">-</code></span>
+            <span class="chip">
+              <span data-i18n="top.adapter">网卡</span> <code id="chip-adapter">-</code>
+            </span>
+            <span class="chip">
+              <span data-i18n="top.local_ip">本机 IP</span> <code id="chip-ip">-</code>
+            </span>
             <span class="chip">
               <i class="dot" id="chip-admin-dot"></i>
-              权限 <b id="chip-admin">检测中</b>
+              <span data-i18n="top.privilege">权限</span> <b id="chip-admin">检测中</b>
             </span>
-            <span class="chip">运行时长 <b id="chip-uptime">-</b></span>
+            <span class="chip">
+              <span data-i18n="top.uptime">运行时长</span> <b id="chip-uptime">-</b>
+            </span>
           </div>
           <div class="chips-foot">
-            <span id="foot-version">版本读取中…</span>
-            <span>仅监听本机回环地址</span>
+            <span id="foot-version" data-i18n="top.version_loading">版本读取中…</span>
+            <span data-i18n="top.loopback_only">仅监听本机回环地址</span>
           </div>
         </div>
       </header>
@@ -79,22 +90,24 @@
         <section class="page active" id="page-overview">
           <div class="stats">
             <div class="stat">
-              <div class="stat-label">跟踪中的来源 IP</div>
+              <div class="stat-label" data-i18n="ov.tracking">跟踪中的来源 IP</div>
               <div class="stat-value" id="stat-tracking">0</div>
-              <div class="stat-foot">正在累计连接次数的地址</div>
+              <div class="stat-foot" data-i18n="ov.tracking_hint">正在累计连接次数的地址</div>
             </div>
             <div class="stat danger">
-              <div class="stat-label">已封停</div>
+              <div class="stat-label" data-i18n="ov.banned">已封停</div>
               <div class="stat-value" id="stat-banned">0</div>
               <div class="stat-foot" id="stat-banned-foot">其中永久 0</div>
             </div>
             <div class="stat ok">
-              <div class="stat-label">受保护端口</div>
+              <div class="stat-label" data-i18n="ov.ports">受保护端口</div>
               <div class="stat-value" id="stat-ports">0</div>
-              <div class="stat-foot" id="stat-ports-foot">TCP / TCP-WEB / UDP 合计</div>
+              <div class="stat-foot" id="stat-ports-foot" data-i18n="ov.ports_foot_default">
+                TCP / TCP-WEB / UDP 合计
+              </div>
             </div>
             <div class="stat warn">
-              <div class="stat-label">累计抓包</div>
+              <div class="stat-label" data-i18n="ov.packets">累计抓包</div>
               <div class="stat-value" id="stat-packets">0</div>
               <div class="stat-foot" id="stat-packets-foot">累计封停 0 次</div>
             </div>
@@ -103,9 +116,10 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                判定明细<small>抓到的包为何未计入端口统计</small>
+                <span data-i18n="ov.ignore_title">判定明细</span>
+                <small data-i18n="ov.ignore_sub">抓到的包为何未计入端口统计</small>
               </div>
-              <div class="muted" style="font-size: 13px">
+              <div class="muted" style="font-size: 13px" data-i18n="ov.ignore_note">
                 保护端口长期无记录时，看这几项即可定位是抓包问题还是判定问题
               </div>
             </div>
@@ -118,9 +132,10 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                抓包观测<small>混杂模式实际收到的包，按次数排序</small>
+                <span data-i18n="ov.obs_title">抓包观测</span>
+                <small data-i18n="ov.obs_sub">混杂模式实际收到的包，按次数排序</small>
               </div>
-              <div class="muted" style="font-size: 13px">
+              <div class="muted" style="font-size: 13px" data-i18n="ov.obs_note">
                 这里没有出现目标端口，说明该端口的包根本没被网卡收到
               </div>
             </div>
@@ -128,11 +143,11 @@
               <table>
                 <thead>
                   <tr>
-                    <th>方向</th>
-                    <th>协议</th>
-                    <th>本机端口</th>
-                    <th>标志</th>
-                    <th>包数</th>
+                    <th data-i18n="dir.label">方向</th>
+                    <th data-i18n="th.protocol">协议</th>
+                    <th data-i18n="obs.local_port">本机端口</th>
+                    <th data-i18n="obs.flags">标志</th>
+                    <th data-i18n="obs.count">包数</th>
                   </tr>
                 </thead>
                 <tbody id="tbody-observe"></tbody>
@@ -142,15 +157,23 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">最近事件<small>封停、解封与系统提示</small></div>
+              <div class="card-title">
+                <span data-i18n="ov.events_title">最近事件</span>
+                <small data-i18n="ov.events_sub">封停、解封与系统提示</small>
+              </div>
+              <div class="muted" style="font-size: 13px" data-i18n="ov.events_note">
+                事件消息由程序内核生成，目前仅提供中文
+              </div>
             </div>
             <div class="events" id="events"></div>
           </div>
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">系统防护开关</div>
-              <div class="muted" style="font-size: 13px">切换后立即生效并写入配置</div>
+              <div class="card-title" data-i18n="ov.quick_title">系统防护开关</div>
+              <div class="muted" style="font-size: 13px" data-i18n="ov.quick_sub">
+                切换后立即生效并写入配置
+              </div>
             </div>
             <div class="card-body">
               <div class="switches" id="quick-switches"></div>
@@ -163,12 +186,14 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                当前连接<small>按来源 IP / 受保护端口累计次数，达到阈值即封停</small>
+                <span data-i18n="conn.title">当前连接</span>
+                <small data-i18n="conn.sub">按来源 IP / 受保护端口累计次数，达到阈值即封停</small>
               </div>
               <div class="form-actions">
                 <input
                   type="text"
                   id="filter-connections"
+                  data-i18n-ph="conn.filter"
                   placeholder="筛选 IP / 地理位置 / 端口"
                   style="width: 190px"
                 />
@@ -178,15 +203,15 @@
               <table>
                 <thead>
                   <tr>
-                    <th>来源 IP</th>
-                    <th>地理位置</th>
-                    <th>分组</th>
-                    <th>服务端口</th>
-                    <th>连接次数 / 阈值</th>
-                    <th>首次出现</th>
-                    <th>最近出现</th>
-                    <th>状态</th>
-                    <th>操作</th>
+                    <th data-i18n="th.ip">来源 IP</th>
+                    <th data-i18n="th.location">地理位置</th>
+                    <th data-i18n="th.group">分组</th>
+                    <th data-i18n="th.service_port">服务端口</th>
+                    <th data-i18n="th.count_threshold">连接次数 / 阈值</th>
+                    <th data-i18n="th.first_seen">首次出现</th>
+                    <th data-i18n="th.last_seen">最近出现</th>
+                    <th data-i18n="th.state">状态</th>
+                    <th data-i18n="th.action">操作</th>
                   </tr>
                 </thead>
                 <tbody id="tbody-connections"></tbody>
@@ -199,35 +224,39 @@
         <section class="page fill" id="page-bans">
           <div class="card">
             <div class="card-head">
-              <div class="card-title">封停列表<small>每条记录对应一条 PortGuard- 防火墙规则</small></div>
+              <div class="card-title">
+                <span data-i18n="bans.title">封停列表</span>
+                <small data-i18n="bans.sub">每条记录对应一条 PortGuard- 防火墙规则</small>
+              </div>
               <div class="form-actions">
                 <input
                   type="text"
                   id="manual-ip"
+                  data-i18n-ph="bans.manual"
                   placeholder="手动封停 IP，如 203.0.113.9"
                   style="width: 210px"
                 />
                 <label class="chip" style="cursor: pointer">
                   <input type="checkbox" id="manual-permanent" checked style="width: auto" />
-                  永久
+                  <span data-i18n="bans.permanent">永久</span>
                 </label>
-                <button class="btn primary" id="btn-manual-ban">封停</button>
+                <button class="btn primary" id="btn-manual-ban" data-i18n="btn.ban">封停</button>
               </div>
             </div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>IP</th>
-                    <th>地理位置</th>
-                    <th>原因</th>
-                    <th>协议</th>
-                    <th>端口</th>
-                    <th>尝试次数</th>
-                    <th>封停时间</th>
-                    <th>剩余</th>
-                    <th>防火墙规则名</th>
-                    <th>操作</th>
+                    <th data-i18n="th.ip">来源 IP</th>
+                    <th data-i18n="th.location">地理位置</th>
+                    <th data-i18n="th.reason">原因</th>
+                    <th data-i18n="th.protocol">协议</th>
+                    <th data-i18n="th.port">端口</th>
+                    <th data-i18n="th.attempts">尝试次数</th>
+                    <th data-i18n="th.banned_at">封停时间</th>
+                    <th data-i18n="th.remaining">剩余</th>
+                    <th data-i18n="th.rule_name">防火墙规则名</th>
+                    <th data-i18n="th.action">操作</th>
                   </tr>
                 </thead>
                 <tbody id="tbody-bans"></tbody>
@@ -242,20 +271,52 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">监听网卡</div>
-              <button class="btn sm" id="btn-adapters-refresh">重新枚举</button>
+              <div class="card-title">
+                <span data-i18n="set.language_title">界面语言</span>
+                <small data-i18n="set.language_sub">
+                  面板文案语言；「跟随系统」按服务器系统语言自动选择，保存后立即生效
+                </small>
+              </div>
             </div>
             <div class="card-body">
               <div class="form-grid">
                 <div class="field">
-                  <label for="cfg-adapter">抓包网卡</label>
+                  <label for="cfg-language" data-i18n="set.language">语言</label>
+                  <select id="cfg-language">
+                    <option value="auto" data-i18n="set.language_auto">跟随系统</option>
+                    <option value="zh" data-i18n="set.language_zh">简体中文</option>
+                    <option value="en" data-i18n="set.language_en">English</option>
+                  </select>
+                  <span class="hint" data-i18n="set.language_hint">
+                    事件流与运行日志由程序内核生成，始终为中文
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title" data-i18n="set.adapter_title">监听网卡</div>
+              <button class="btn sm" id="btn-adapters-refresh" data-i18n="btn.reenumerate">
+                重新枚举
+              </button>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="cfg-adapter" data-i18n="set.adapter">抓包网卡</label>
                   <select id="cfg-adapter"></select>
-                  <span class="hint">只能选择在用的物理网卡 IP；虚拟网卡需在配置文件中放开</span>
+                  <span class="hint" data-i18n="set.adapter_hint">
+                    只能选择在用的物理网卡 IP；虚拟网卡需在配置文件中放开
+                  </span>
                 </div>
                 <div class="field">
-                  <label for="cfg-bind">面板监听地址</label>
+                  <label for="cfg-bind" data-i18n="set.bind">面板监听地址</label>
                   <input type="text" id="cfg-bind" placeholder="127.0.0.1:58080" />
-                  <span class="hint">修改后需重启程序生效；建议保持仅本机回环</span>
+                  <span class="hint" data-i18n="set.bind_hint">
+                    修改后需重启程序生效；建议保持仅本机回环
+                  </span>
                 </div>
               </div>
             </div>
@@ -264,7 +325,10 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                受保护端口与阈值<small>端口用英文逗号分隔；次数为累计值，非某段时间内的次数；端口下方可逐条写备注（仅展示，不参与判定）</small>
+                <span data-i18n="set.ports_title">受保护端口与阈值</span>
+                <small data-i18n="set.ports_sub">
+                  端口用英文逗号分隔；次数为累计值，非某段时间内的次数；端口下方可逐条写备注（仅展示，不参与判定）
+                </small>
               </div>
             </div>
             <div class="card-body" id="protect-rows"></div>
@@ -273,15 +337,16 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                连接事件来源<small>决定什么样的包算「一次连接」</small>
+                <span data-i18n="set.events_title">连接事件来源</span>
+                <small data-i18n="set.events_sub">决定什么样的包算「一次连接」</small>
               </div>
             </div>
             <div class="card-body">
               <label class="switch">
                 <input type="checkbox" id="cfg-count-accept" />
                 <span class="switch-text">
-                  <b>统计服务端应答（SYN+ACK）</b>
-                  <span>
+                  <b data-i18n="set.count_accept">统计服务端应答（SYN+ACK）</b>
+                  <span data-i18n="set.count_accept_hint">
                     部分云主机 / 网卡的混杂模式收不到入站包，只有本机发出的包可见；
                     打开后改用本机发出的握手响应计数，可在「抓包观测」里确认是否需要
                   </span>
@@ -292,20 +357,22 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">封停策略</div>
+              <div class="card-title" data-i18n="set.ban_title">封停策略</div>
             </div>
             <div class="card-body">
               <div class="form-grid">
                 <div class="field">
-                  <label for="cfg-ban-duration">临时封停时长（秒）</label>
+                  <label for="cfg-ban-duration" data-i18n="set.ban_duration">临时封停时长（秒）</label>
                   <input type="number" id="cfg-ban-duration" min="60" step="60" />
-                  <span class="hint">到期自动解封并删除对应防火墙规则</span>
+                  <span class="hint" data-i18n="set.ban_duration_hint">
+                    到期自动解封并删除对应防火墙规则
+                  </span>
                 </div>
                 <label class="switch">
                   <input type="checkbox" id="cfg-ban-permanent" />
                   <span class="switch-text">
-                    <b>一律永久封停</b>
-                    <span>勾选后忽略上方的时长设置</span>
+                    <b data-i18n="set.ban_permanent">一律永久封停</b>
+                    <span data-i18n="set.ban_permanent_hint">勾选后忽略上方的时长设置</span>
                   </span>
                 </label>
               </div>
@@ -314,17 +381,22 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">名单<small>每行一条；支持 1.2.3.4 / 1.2.3.0/24 / 1.2.3.* / 区间；下方可逐条写备注（仅展示）</small></div>
+              <div class="card-title">
+                <span data-i18n="set.lists_title">名单</span>
+                <small data-i18n="set.lists_sub">
+                  每行一条；支持 1.2.3.4 / 1.2.3.0/24 / 1.2.3.* / 区间；下方可逐条写备注（仅展示）
+                </small>
+              </div>
             </div>
             <div class="card-body">
               <div class="form-grid">
                 <div class="field">
-                  <label for="cfg-whitelist">白名单（永不封停，优先级最高）</label>
+                  <label for="cfg-whitelist" data-i18n="set.whitelist">白名单（永不封停，优先级最高）</label>
                   <textarea id="cfg-whitelist" spellcheck="false"></textarea>
                   <div class="note-grid" id="notes-whitelist"></div>
                 </div>
                 <div class="field">
-                  <label for="cfg-blacklist">黑名单（出现即封停）</label>
+                  <label for="cfg-blacklist" data-i18n="set.blacklist">黑名单（出现即封停）</label>
                   <textarea id="cfg-blacklist" spellcheck="false"></textarea>
                   <div class="note-grid" id="notes-blacklist"></div>
                 </div>
@@ -334,21 +406,24 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">远程桌面保护<small>按客户端计算机名放行</small></div>
+              <div class="card-title">
+                <span data-i18n="set.rdp_title">远程桌面保护</span>
+                <small data-i18n="set.rdp_sub">按客户端计算机名放行</small>
+              </div>
             </div>
             <div class="card-body">
               <div class="form-grid">
                 <label class="switch">
                   <input type="checkbox" id="cfg-rdp-enabled" />
                   <span class="switch-text">
-                    <b>启用远程桌面接入保护</b>
-                    <span>不在名单内的客户端会被断开连接</span>
+                    <b data-i18n="set.rdp_enabled">启用远程桌面接入保护</b>
+                    <span data-i18n="set.rdp_enabled_hint">不在名单内的客户端会被断开连接</span>
                   </span>
                 </label>
                 <div class="field">
-                  <label for="cfg-rdp-list">允许的客户端计算机名</label>
+                  <label for="cfg-rdp-list" data-i18n="set.rdp_list">允许的客户端计算机名</label>
                   <textarea id="cfg-rdp-list" spellcheck="false" style="min-height: 92px"></textarea>
-                  <span class="hint">留空表示不限制接入</span>
+                  <span class="hint" data-i18n="set.rdp_list_hint">留空表示不限制接入</span>
                 </div>
               </div>
             </div>
@@ -356,13 +431,13 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">系统与日志</div>
+              <div class="card-title" data-i18n="set.sys_title">系统与日志</div>
             </div>
             <div class="card-body">
               <div class="switches" id="system-switches"></div>
               <div class="form-grid" style="margin-top: 14px">
                 <div class="field">
-                  <label for="cfg-log-level">日志级别</label>
+                  <label for="cfg-log-level" data-i18n="set.log_level">日志级别</label>
                   <select id="cfg-log-level">
                     <option value="trace">trace</option>
                     <option value="debug">debug</option>
@@ -372,7 +447,7 @@
                   </select>
                 </div>
                 <div class="field">
-                  <label for="cfg-log-lines">内存中保留的日志行数</label>
+                  <label for="cfg-log-lines" data-i18n="set.log_lines">内存中保留的日志行数</label>
                   <input type="number" id="cfg-log-lines" min="100" step="100" />
                 </div>
               </div>
@@ -382,7 +457,8 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                地理位置<small>只用于展示来源 IP 归属，不参与封停判定</small>
+                <span data-i18n="set.geo_title">地理位置</span>
+                <small data-i18n="set.geo_sub">只用于展示来源 IP 归属，不参与封停判定</small>
               </div>
             </div>
             <div class="card-body">
@@ -390,11 +466,13 @@
                 <div class="field">
                   <label class="chip" style="cursor: pointer">
                     <input type="checkbox" id="cfg-geo-enabled" style="width: auto" />
-                    展示来源 IP 的地理位置
+                    <span data-i18n="set.geo_enabled">展示来源 IP 的地理位置</span>
                   </label>
                 </div>
                 <div class="field">
-                  <label for="cfg-geo-db">数据库文件名（相对路径依次找 data/、程序目录、当前目录）</label>
+                  <label for="cfg-geo-db" data-i18n="set.geo_db">
+                    数据库文件名（相对路径依次找 data/、程序目录、当前目录）
+                  </label>
                   <input type="text" id="cfg-geo-db" placeholder="ip2region_v4.xdb" />
                 </div>
               </div>
@@ -404,8 +482,8 @@
 
           <div class="card">
             <div class="card-body form-actions">
-              <button class="btn primary" id="btn-save">保存设置</button>
-              <button class="btn" id="btn-reload">放弃修改</button>
+              <button class="btn primary" id="btn-save" data-i18n="btn.save">保存设置</button>
+              <button class="btn" id="btn-reload" data-i18n="btn.reload">放弃修改</button>
               <span class="muted" id="save-hint"></span>
             </div>
           </div>
@@ -415,17 +493,17 @@
         <section class="page fill" id="page-logs">
           <div class="card">
             <div class="card-head">
-              <div class="card-title">运行日志</div>
+              <div class="card-title" data-i18n="log.title">运行日志</div>
               <div class="form-actions">
                 <select id="log-filter" style="width: 130px">
-                  <option value="">全部级别</option>
-                  <option value="info">info 及以上</option>
-                  <option value="warn">warn 及以上</option>
-                  <option value="error">仅 error</option>
+                  <option value="" data-i18n="log.level_all">全部级别</option>
+                  <option value="info" data-i18n="log.level_info">info 及以上</option>
+                  <option value="warn" data-i18n="log.level_warn">warn 及以上</option>
+                  <option value="error" data-i18n="log.level_error">仅 error</option>
                 </select>
                 <label class="chip" style="cursor: pointer">
                   <input type="checkbox" id="log-autoscroll" checked style="width: auto" />
-                  自动滚动
+                  <span data-i18n="log.autoscroll">自动滚动</span>
                 </label>
                 <span class="muted" id="log-path"></span>
               </div>
@@ -440,15 +518,16 @@
 
     <div class="modal hidden" id="modal">
       <div class="modal-box">
-        <h3 id="modal-title">确认操作</h3>
+        <h3 id="modal-title" data-i18n="modal.title">确认操作</h3>
         <p id="modal-text"></p>
         <div class="modal-actions">
-          <button class="btn" id="modal-cancel">取消</button>
-          <button class="btn danger" id="modal-ok">确认</button>
+          <button class="btn" id="modal-cancel" data-i18n="modal.cancel">取消</button>
+          <button class="btn danger" id="modal-ok" data-i18n="modal.confirm">确认</button>
         </div>
       </div>
     </div>
 
+    <script src="/assets/i18n.js"></script>
     <script src="/assets/app.js"></script>
   </body>
 </html>

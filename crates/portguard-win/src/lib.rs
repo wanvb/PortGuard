@@ -5,6 +5,7 @@
 //! - `admin`           —— 管理员权限检查（抓包与防火墙的前提）
 //! - `single_instance` —— 命名互斥体单实例守卫
 //! - `timezone`        —— 本地时区偏移（日志时间戳）
+//! - `locale`          —— 系统界面语言探测（面板「跟随系统」语言）
 //! - `browser`         —— 打开控制面板地址
 //! - `service`         —— Windows 系统服务：注册 / 卸载 / 服务分发（开机自启）
 //! - `tray`            —— 系统托盘图标与菜单
@@ -19,6 +20,7 @@
 pub mod admin;
 pub mod browser;
 pub mod console;
+pub mod locale;
 pub mod service;
 pub mod single_instance;
 pub mod timezone;
@@ -32,6 +34,7 @@ pub use console::{
     enable_utf8_output, exit_requested, hide_own_console_window, install_exit_handler,
     request_exit, show_error,
 };
+pub use locale::system_language;
 pub use service::Service;
 pub use single_instance::SingleInstance;
 pub use tray::{Tray, TrayAction, WM_TRAYICON};

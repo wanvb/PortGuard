@@ -160,7 +160,19 @@ pub struct PanelConfig {
     pub bind: String,
     /// 启动后是否自动打开默认浏览器。
     pub auto_open_browser: bool,
+    /// 面板界面语言：`auto`（跟随服务器系统语言）/ `zh` / `en`。
+    pub language: String,
 }
+
+/// 界面语言：跟随服务器系统语言环境（默认）。
+pub const LANGUAGE_AUTO: &str = "auto";
+/// 界面语言：简体中文。
+pub const LANGUAGE_ZH: &str = "zh";
+/// 界面语言：英文。
+pub const LANGUAGE_EN: &str = "en";
+
+/// 界面语言可选值，供面板下拉框与校验共用（顺序即下拉框顺序）。
+pub const LANGUAGES: [&str; 3] = [LANGUAGE_AUTO, LANGUAGE_ZH, LANGUAGE_EN];
 
 /// 面板默认监听地址。
 ///
@@ -177,6 +189,29 @@ impl Default for PanelConfig {
             enabled: true,
             bind: DEFAULT_PANEL_BIND.to_string(),
             auto_open_browser: true,
+            language: LANGUAGE_AUTO.to_string(),
+        }
+    }
+}
+
+impl PanelConfig {
+    /// 界面语言的**实际生效值**（只可能是 [`LANGUAGE_ZH`] 或 [`LANGUAGE_EN`]）。
+    ///
+    /// `system_default` 是启动时探测到的服务器系统语言（`"zh"` / `"en"`）：
+    /// 配置为 `auto` 时跟随它，配置为具体语言时以配置为准。探测结果不认识
+    /// （空串或其它值）一律回落到中文——面板是给中文环境的运维用的，
+    /// 宁可显示中文，也不要因为探测失败而把界面变成看不懂的英文。
+    pub fn effective_language(&self, system_default: &str) -> &'static str {
+        match self.language.as_str() {
+            LANGUAGE_ZH => LANGUAGE_ZH,
+            LANGUAGE_EN => LANGUAGE_EN,
+            _ => {
+                if system_default.starts_with(LANGUAGE_EN) {
+                    LANGUAGE_EN
+                } else {
+                    LANGUAGE_ZH
+                }
+            }
         }
     }
 }
@@ -391,6 +426,9 @@ impl Config {
         if self.panel.bind.trim().is_empty() {
             self.panel.bind = PanelConfig::default().bind;
         }
+        // 手写配置里写错语言（拼错 / 大小写）一律回到「跟随系统」，
+        // 不留一个永远不会生效的设置项在文件里
+        self.panel.language = normalize_language(&self.panel.language);
         if self.logging.max_memory_lines == 0 {
             self.logging.max_memory_lines = 2000;
         }
@@ -486,6 +524,16 @@ impl Config {
 /// - 2：面板默认端口改为 [`DEFAULT_PANEL_BIND`]（`127.0.0.1:58080`），加载时迁移旧值
 /// - 3：TCP-WEB 默认累计连接阈值 10 → [`DEFAULT_WEB_MAX_ATTEMPTS`]（300），加载时迁移旧值
 pub const CURRENT_CONFIG_VERSION: u32 = 3;
+
+/// 清洗界面语言设置：去空白、转小写，不是可选值的一律回到 `auto`。
+fn normalize_language(value: &str) -> String {
+    let v = value.trim().to_ascii_lowercase();
+    if LANGUAGES.contains(&v.as_str()) {
+        v
+    } else {
+        LANGUAGE_AUTO.to_string()
+    }
+}
 
 /// 清洗规则行：去空白、去空行、去注释行。
 fn normalize_rule_lines(lines: &[String]) -> Vec<String> {
@@ -592,6 +640,53 @@ mod tests {
         assert_eq!(c.protect.tcp.ports, vec![3389]);
         assert_eq!(c.protect.http.ports, vec![80, 443]);
         assert_eq!(c.protect.udp.ports, vec![3389]);
+    }
+
+    #[test]
+    fn 界面语言默认跟随系统且非法值被清洗() {
+        let c = Config::with_defaults();
+        assert_eq!(c.panel.language, LANGUAGE_AUTO, "默认应为跟随系统");
+        // auto：中文系统显示中文，英文系统显示英文
+        assert_eq!(c.panel.effective_language("zh"), LANGUAGE_ZH);
+        assert_eq!(c.panel.effective_language("en"), LANGUAGE_EN);
+        // 探测失败（空串 / 不认识的值）回落中文，不把界面变成看不懂的英文
+        assert_eq!(c.panel.effective_language(""), LANGUAGE_ZH);
+        assert_eq!(c.panel.effective_language("de"), LANGUAGE_ZH);
+
+        // 显式指定时以配置为准，与系统语言无关（顺带验证大小写与空白被清洗）
+        let mut zh = Config::with_defaults();
+        zh.panel.language = " ZH ".to_string();
+        zh.normalize();
+        assert_eq!(zh.panel.language, LANGUAGE_ZH);
+        assert_eq!(zh.panel.effective_language("en"), LANGUAGE_ZH);
+
+        let mut en = Config::with_defaults();
+        en.panel.language = "EN".to_string();
+        en.normalize();
+        assert_eq!(en.panel.language, LANGUAGE_EN);
+        assert_eq!(en.panel.effective_language("zh"), LANGUAGE_EN);
+
+        // 拼错的设置回到 auto，而不是留在文件里成为一个永不生效的选项
+        let mut bad = Config::with_defaults();
+        bad.panel.language = "english".to_string();
+        bad.normalize();
+        assert_eq!(bad.panel.language, LANGUAGE_AUTO);
+    }
+
+    #[test]
+    fn 旧配置缺少语言字段时跟随系统() {
+        // 语言是本版本新增字段：旧 config.toml 不带它，必须照常读入并走 auto
+        let c = Config::from_toml("[panel]\nbind = \"127.0.0.1:19000\"\n").unwrap();
+        assert_eq!(c.panel.language, LANGUAGE_AUTO);
+        assert_eq!(c.panel.effective_language("en"), LANGUAGE_EN);
+    }
+
+    #[test]
+    fn 语言设置随配置往返() {
+        let mut c = Config::with_defaults();
+        c.panel.language = LANGUAGE_EN.to_string();
+        let back = Config::from_toml(&c.to_toml().unwrap()).unwrap();
+        assert_eq!(back.panel.language, LANGUAGE_EN);
     }
 
     #[test]

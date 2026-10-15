@@ -48,6 +48,8 @@ impl Harness {
             log_file: dir.join("test.log").display().to_string(),
             data_dir: dir.display().to_string(),
             started_at_ms: 1_700_000_000_000,
+            // 固定成英文系统：配置里的 auto 才有可断言的确定结果
+            system_language: "en".to_string(),
         };
         // 端口 0 → 由系统分配，避免与正在运行的 PortGuard 抢 58080
         let server =
@@ -224,6 +226,43 @@ fn 只读接口逐一可用() {
             body
         );
     }
+}
+
+#[test]
+fn 界面语言随设置切换且无需重启() {
+    let h = Harness::start();
+    let language = |h: &Harness| -> String {
+        let body = split_response(&h.get("/api/meta")).1;
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["language"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+
+    // 默认 auto：跟随服务器系统语言（本测试固定为英文）
+    assert_eq!(language(&h), "en");
+
+    // 改成中文：写盘成功的同一份配置必须让界面语言立即变过来，不必重启程序
+    let body = split_response(&h.get("/api/config")).1;
+    let mut cfg: serde_json::Value = serde_json::from_str(&body).unwrap();
+    cfg["panel"]["language"] = serde_json::json!("zh");
+    let (head, _) = split_response(&h.post("/api/config", &cfg.to_string()));
+    assert!(head.contains("200"), "保存语言设置失败：{}", head);
+    assert_eq!(language(&h), "zh");
+
+    // 改回 auto：重新跟随系统
+    cfg["panel"]["language"] = serde_json::json!("auto");
+    let (head, _) = split_response(&h.post("/api/config", &cfg.to_string()));
+    assert!(head.contains("200"), "保存语言设置失败：{}", head);
+    assert_eq!(language(&h), "en");
+
+    // 胡乱写一个值：规范化回 auto，而不是留一个永不生效的设置
+    cfg["panel"]["language"] = serde_json::json!("klingon");
+    let (head, saved) = split_response(&h.post("/api/config", &cfg.to_string()));
+    assert!(head.contains("200"), "保存语言设置失败：{}", head);
+    let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(saved["panel"]["language"], "auto");
+    assert_eq!(language(&h), "en");
 }
 
 #[test]

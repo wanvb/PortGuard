@@ -22,6 +22,11 @@ pub const ASSETS: &[Asset] = &[
         body: include_str!("../assets/style.css"),
     },
     Asset {
+        path: "/assets/i18n.js",
+        mime: "application/javascript; charset=utf-8",
+        body: include_str!("../assets/i18n.js"),
+    },
+    Asset {
         path: "/assets/app.js",
         mime: "application/javascript; charset=utf-8",
         body: include_str!("../assets/app.js"),
@@ -59,6 +64,8 @@ mod tests {
             "id=\"parse-note\"",
             "id=\"tbody-observe\"",
             "id=\"cfg-count-accept\"",
+            // 界面语言设置：设置页必须能改语言，且 app.js 要把它写回配置
+            "id=\"cfg-language\"",
             // 版本信息已随导航移到顶部状态条，仍是 app.js 的写入目标
             "id=\"foot-version\"",
         ] {
@@ -123,6 +130,116 @@ mod tests {
         let css = lookup("/assets/style.css").unwrap().body;
         assert!(css.contains(".note-grid"), "样式表缺少备注网格规则");
         assert!(css.contains(".note-tag"), "样式表缺少数据表备注规则");
+    }
+
+    #[test]
+    fn 界面语言资源内嵌且文案成对() {
+        let js = lookup("/assets/i18n.js").expect("语言文案表必须内嵌").body;
+        // 首页每个语言标记都必须在文案表里有中文与英文两份：
+        // 漏一份的表现为「切到英文后这一块还是中文」，且在界面上看不出来是漏了
+        let keys = i18n_keys(INDEX_HTML);
+        assert!(keys.len() > 50, "首页语言标记过少：{}", keys.len());
+        for key in &keys {
+            let entry = i18n_entry(js, key)
+                .unwrap_or_else(|| panic!("语言文案表缺少键 {}", key));
+            assert!(entry.contains("zh:"), "键 {} 缺少中文文案：{}", key, entry);
+            assert!(entry.contains("en:"), "键 {} 缺少英文文案：{}", key, entry);
+        }
+
+        // 脚本里出现的每个文案键（含 t() 的参数与数组里的键）都必须有译文，
+        // 否则切到英文时那处会直接显示成键名
+        let app = lookup("/assets/app.js").expect("app.js 必须内嵌").body;
+        let app_keys = i18n_like_literals(app);
+        // 扫描本身要有产出，否则下面的循环形同虚设（键全写死中文它也会「通过」）
+        assert!(app_keys.len() > 40, "脚本里的文案键只有 {} 个，扫描逻辑或脚本异常", app_keys.len());
+        for key in app_keys {
+            let entry = i18n_entry(js, &key).unwrap_or_else(|| panic!("app.js 用了未定义的文案键 {}", key));
+            assert!(entry.contains("zh:") && entry.contains("en:"), "键 {} 文案不成对：{}", key, entry);
+        }
+
+        // 脚本必须真的把文案表与应用逻辑接起来
+        assert!(app.contains("PG_I18N"), "脚本应从 i18n.js 取文案");
+        assert!(app.contains("[data-i18n]"), "脚本应刷新静态节点的文案");
+        // 语言必须随整份配置写回：漏掉会被后端按字段默认值当成 auto（与备注同类故障）
+        assert!(
+            app.contains("base.panel.language = $(\"cfg-language\").value"),
+            "collectSettings 必须写回界面语言字段"
+        );
+        assert!(
+            INDEX_HTML.contains("/assets/i18n.js"),
+            "首页必须先加载语言文案表"
+        );
+        // 切换语言只准刷新文案，不准重建设置页表单 —— 重建会把用户还没保存的
+        // 端口 / 名单 / 备注输入冲掉（与「改一处丢一处」的历史故障同类）
+        assert!(
+            app.contains("retranslateSettings()"),
+            "切换语言必须走只改文案的路径，而非重建整张表单"
+        );
+        assert!(
+            app.contains("function retranslateSettings"),
+            "脚本缺少设置页文案的原地刷新实现"
+        );
+    }
+
+    /// 首页上的全部语言键（data-i18n / data-i18n-ph / data-i18n-title）。
+    fn i18n_keys(html: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        for attr in ["data-i18n=\"", "data-i18n-ph=\"", "data-i18n-title=\""] {
+            let mut rest = html;
+            while let Some(i) = rest.find(attr) {
+                let tail = &rest[i + attr.len()..];
+                if let Some(end) = tail.find('"') {
+                    let key = tail[..end].to_string();
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                }
+                rest = &tail[tail.find('"').map(|e| e + 1).unwrap_or(tail.len())..];
+            }
+        }
+        keys
+    }
+
+    /// 扫描脚本里「长得像文案键」的字符串字面量：至少两段、每段都是
+    /// 小写字母打头的小写字母 / 数字 / 下划线，段间用点连接。
+    ///
+    /// 只在源码里做静态扫描，因此像 `"reason." + x` 这种拼接出来的键不会被算进来
+    /// （拼接的键只能靠 i18n.js 自身保证成对）。
+    fn i18n_like_literals(js: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut rest = js;
+        while let Some(i) = rest.find('"') {
+            let tail = &rest[i + 1..];
+            let end = match tail.find('"') {
+                Some(e) => e,
+                None => break,
+            };
+            let lit = &tail[..end];
+            if is_i18n_key(lit) && !out.iter().any(|k| k == lit) {
+                out.push(lit.to_string());
+            }
+            rest = &tail[end + 1..];
+        }
+        out
+    }
+
+    fn is_i18n_key(s: &str) -> bool {
+        let parts: Vec<&str> = s.split('.').collect();
+        parts.len() >= 2
+            && parts.iter().all(|p| {
+                p.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false)
+                    && p.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            })
+    }
+
+    /// 取文案表里某个键的整条记录（`"键": { zh: …, en: … },`）。
+    fn i18n_entry<'a>(js: &'a str, key: &str) -> Option<&'a str> {
+        let needle = format!("\"{}\": {{", key);
+        let start = js.find(&needle)?;
+        let rest = &js[start..];
+        let end = rest.find("},").unwrap_or(rest.len());
+        Some(&rest[..end])
     }
 
     #[test]

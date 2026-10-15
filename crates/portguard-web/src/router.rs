@@ -80,6 +80,11 @@ pub struct PanelMeta {
     pub log_file: String,
     pub data_dir: String,
     pub started_at_ms: u64,
+    /// 服务器系统语言（`"zh"` / `"en"`，启动时探测一次）。
+    ///
+    /// 面板语言设置为 `auto` 时用它决定界面语言；`/api/meta` 每次请求都按
+    /// **当前配置**重新解析，因此改完设置立即生效，不必重启程序。
+    pub system_language: String,
 }
 
 /// 变更类请求体。
@@ -206,6 +211,9 @@ pub fn handle(
             "log_file": meta.log_file,
             "data_dir": meta.data_dir,
             "started_at_ms": meta.started_at_ms,
+            // 界面语言：按当前配置解析（auto 时用服务器系统语言），
+            // 前端拿到后立即切换文案，因此保存设置即生效
+            "language": api.config().panel.effective_language(&meta.system_language),
         })),
 
         // ---- 变更接口 ----

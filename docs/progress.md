@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
 > 最后更新：2026-10-15
-> 测试规模：**288 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 测试规模：**295 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -9,16 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 102 | 完成 |
+| `portguard-core` | 105 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
 | `portguard-storage` | 20 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
-| `portguard-win` | 30 | 完成 |
+| `portguard-win` | 32 | 完成 |
 | `portguard-geo` | 18 | 完成 |
-| `portguard-web` | 37 | 完成 |
+| `portguard-web` | 39 | 完成 |
 | `portguard-app` | 34 | 完成 |
-| **合计** | **288** | — |
+| **合计** | **295** | — |
 
 ---
 
@@ -544,6 +544,51 @@
 - 同一规则同时出现在白名单与黑名单时共用一条备注（`lists.notes` 的键是规则原文，不区分名单）
 - 手改 `config.toml` 时若给 `[lists.notes]` 下含点的键漏写引号，会被解析成分层表导致整份配置
   解析失败（走既有的 `config.toml.broken-*` 备份 + 回退默认），面板保存的写法始终带引号
+
+---
+
+## Phase 25 — 面板中英双语（界面语言可跟随系统）
+
+**背景**：面板只有中文一种界面，非中文系统上的使用者看不懂设置项与表头；
+需要一个语言设置项，默认跟随服务器系统语言，也可固定成中文或英文。
+
+### Completed
+
+- **配置项 `panel.language`**（`portguard-core/src/config.rs`）：取值 `auto`（默认）/ `zh` / `en`；
+  `PanelConfig::effective_language(system_default)` 负责解析，`LANGUAGE_AUTO/ZH/EN/LANGUAGES`
+  是唯一取值来源，`Config::normalize` 用 `normalize_language` 清洗非法值（不在表内一律回落 `auto`）；
+  旧配置缺该字段由 `#[serde(default)]` 补成 `auto`，不需要迁移分支
+- **新模块 `portguard-win/src/locale.rs`**：`GetUserDefaultUILanguage` → 取不到再
+  `GetSystemDefaultUILanguage` → 仍取不到按中文；`language_of(langid)` 只看主语言
+  （`0x04` 中文，其余英文，故 0x0804 / 0x0404 都算中文），结论 `OnceLock` 缓存；
+  Cargo 仅新增 `Win32_Globalization` feature
+- **启动时探测一次、请求时解析**：`PanelMeta.system_language` 由主程序启动时填入，
+  `/api/meta` 每次按**当前**配置解析并下发 `language` —— 改语言保存后即刻生效，无需重启
+- **前端文案表 `assets/i18n.js`**（232 条，`键 → {zh, en}`）：`index.html` 静态文案带
+  `data-i18n` / `data-i18n-ph` / `data-i18n-title`，动态内容一律经 `t(key, params)`
+  （占位符用 split/join 替换，不用正则）；设置页新增「界面语言」下拉框 `#cfg-language`，
+  未保存的选择即时预览（`state.langPreview`），保存成功或放弃修改时作废
+- **切语言只改文案不重建表单**：新增 `retranslateSettings()` 原地刷新设置页里由脚本生成的文案
+  （分组名、阈值说明、备注网格、系统开关、网卡下拉框），避免 `renderSettings()` 把用户
+  还没保存的端口 / 名单 / 备注输入冲掉
+- **范围明确**：英文只覆盖面板界面文案；后端产生的事件流消息、运行日志、`parse_samples`
+  与错误说明保持中文（概览「最近事件」卡片有说明文字）
+- 文档同步：四个 crate 的 `CLAUDE.md`、`docs/web-ui-spec.md` 2.4 与 3.1
+
+### Tests
+
+- 新增 7 项：`config` 3 项（默认跟随系统且非法值被清洗、旧配置缺字段跟随系统、随配置往返）、
+  `locale` 2 项（LANGID 按主语言归类、探测结论自洽）、`web` 2 项
+  （`界面语言资源内嵌且文案成对`：静态扫首页标记与脚本里所有 `t("…")` 字面量必须中英成对；
+  `界面语言随设置切换且无需重启`：端到端断言 `auto` / 显式值 / 非法值的实际下发结果）
+- 合计 **295 项全部通过**（`portguard-core` 102 → 105、`portguard-win` 30 → 32、
+  `portguard-web` 37 → 39）
+
+### Known Issues
+
+- 英文界面不翻译后端文本：事件流消息、运行日志、解析样本仍是中文，同一屏上会中英混排
+- 只区分中 / 英两类（其余语言一律按英文界面），且探测的是**服务器**系统语言，
+  经浏览器从别的语言的机器访问时不会跟随浏览器语言
 
 ---
 

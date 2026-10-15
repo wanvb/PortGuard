@@ -20,6 +20,8 @@ windows = { workspace = true, features = [
     "Win32_System_LibraryLoader",
     # GetTimeZoneInformation（日志时间戳使用本地时区）
     "Win32_System_Time",
+    # GetUserDefaultUILanguage / GetSystemDefaultUILanguage（面板「跟随系统」语言）
+    "Win32_Globalization",
     # 托盘：Shell_NotifyIconW / ShellExecuteW
     "Win32_UI_Shell",
     # 隐藏窗口、消息循环、弹出菜单、图标

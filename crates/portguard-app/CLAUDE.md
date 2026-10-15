@@ -15,7 +15,7 @@
 - `runtime::Inner`：共享运行状态（config / engine / bans / events / capture / local_ip / observer 等），同一把锁下保证快照一致；另提供 `capture_diagnostics`、`count_accept`、`reset_observer`。
 - `runtime::OBSERVE_TOP_LIMIT`：面板「抓包观测」展示条数（12）。
 - `controller::Controller`：`new(rt, paths, logger)`，实现 `PortGuardApi`（status / connections / bans / config / save_config / start / stop / ban_ip / unban_ip / 名单增删 / logs / events / adapters / select_adapter / set_protection / data_dir）；额外持有 `RwLock<GeoLookup>`（地理位置展示，`reload_geo` / `location_of` / `with_geo`）。
-- `main`：`fn main()`（无参入口，`std::process::exit(run())`）；`fail()` 统一处理启动期致命错误的呈现方式。
+- `main`：`fn main()`（无参入口，`std::process::exit(run())`）；`fail()` 统一处理启动期致命错误的呈现方式；启动时构造 `PanelMeta`，其中 `system_language` 取自 `portguard_win::system_language()`（面板语言设置为 `auto` 时用它决定中文 / 英文界面）。
 
 ## 关键约束
 - **启动顺序固定**：参数 → **服务模式分发** → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示 → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护 → 主循环 → 收尾。
@@ -32,6 +32,7 @@
 - **阈值判定用累计连接次数**：判定不做滑动窗口，`count >= max_attempts` 即封停；计数唯一的归零路径是 `TRACK_RETENTION_MS`（10 分钟）空闲后 `expire_pass` 的 `engine.prune` 回收该条目。调小该值会让计数更快归零（更容易漏封），调大则让「隔很久来一次」的地址也可能被累计到阈值，改动需同步 `docs/behavior-spec.md` 2.6。
 - **连接事件来源可自动回退**：`accept_pass`（随 5 秒 PRUNE 周期跑）在「受保护 TCP 端口无入站 SYN + 有本机发出的 SYN+ACK」同时成立时自动 `engine.set_count_accept(true)`，写 `warn` 事件与日志说明原因。该判定只做一次：配置里 `count_accept` 被显式改动（`apply_config` 检测到值变化）或启动时即为 `true`（**默认值**，此时根本没有回退的必要），都视为用户已决定，之后永不覆盖；只有自动切换的结果在换网卡时允许重新判定。因此自动回退只对「旧配置里写着 `false`」的机器有意义。重新开始抓包与切换网卡都要 `reset_observer`。
 - **禁止直接调用 netsh**：所有防火墙操作经 `portguard-firewall` 的 `FirewallBackend` trait；`netsh` 仅由该 crate 内部执行，本 crate 不拼命令。
+- **界面语言在启动时探测一次**：`PanelMeta.system_language` 来自 `portguard_win::system_language()`（`OnceLock` 缓存），只在 `panel.language == "auto"` 时被 `portguard-web` 用来决定界面文案；实际语言由面板每次请求按**当前**配置解析，因此用户在设置页改语言后保存即刻生效，本 crate 不需要为它做任何运行期动作，也不得让探测结果参与判定。
 - **单实例**：`SingleInstance::acquire()` 返回 `Ok(None)` 时打开已有实例的面板后退出，不启动第二个监听器。
 - **白名单硬校验**：`ban_ip` 与 `blacklist_add` 落库前查白名单；`whitelist_add` 后立即对已封停地址入队解封。
 - **锁中毒不瘫**：`lock_inner` 用 `unwrap_or_else(|e| e.into_inner())` 继续使用内部数据；非测试代码 `deny(clippy::unwrap_used, clippy::expect_used)`。
