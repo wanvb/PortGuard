@@ -70,6 +70,16 @@ pub struct ProtectConfig {
 /// 必须与配置文件模板保持一致：`#[serde(default)]` 在用户手写的
 /// 局部配置（或旧版本升级后新增字段）上走的就是这个默认值，
 /// 若这里给空端口，程序会静默失去保护能力。
+/// TCP-WEB 组的默认累计连接阈值。
+///
+/// 结构版本 3 起由 10 提到 300：一次页面访问会连带 CSS / JS / 图片 / 接口等
+/// 数十个连接，阈值 10 会让正常访客被秒封。Web 类服务按「连接数多、单连接风险低」
+/// 设阈值，宁可放宽也不能误封。
+pub const DEFAULT_WEB_MAX_ATTEMPTS: u32 = 300;
+
+/// 结构版本 2 及以前的 TCP-WEB 默认阈值，仅用于升级迁移。
+const LEGACY_WEB_MAX_ATTEMPTS: u32 = 10;
+
 impl Default for ProtectConfig {
     fn default() -> Self {
         ProtectConfig {
@@ -83,7 +93,7 @@ impl Default for ProtectConfig {
             },
             http: ProtectionRule {
                 ports: vec![80, 443],
-                max_attempts: 10,
+                max_attempts: DEFAULT_WEB_MAX_ATTEMPTS,
             },
             count_accept: true,
         }
@@ -335,13 +345,19 @@ impl Config {
 
     /// 把旧版本留下的默认值迁移到当前默认值，返回每条迁移的中文说明（无迁移则为空）。
     ///
-    /// 目前只有一条：面板监听地址 `127.0.0.1:18080` → `127.0.0.1:58080`。
-    /// 18080 是各类本地调试工具的常用端口，冲突概率高；凡是仍停在该地址的配置
-    /// 一律跟着新默认值走（刻意保留 18080 的写法不再支持，换个端口即可）。
+    /// - 面板监听地址 `127.0.0.1:18080` → `127.0.0.1:58080`。18080 是各类本地调试
+    ///   工具的常用端口，冲突概率高；凡是仍停在该地址的配置一律跟着新默认值走
+    ///   （刻意保留 18080 的写法不再支持，换个端口即可）。
+    /// - TCP-WEB 累计连接阈值 10 → [`DEFAULT_WEB_MAX_ATTEMPTS`]。旧默认值会把
+    ///   正常访客（一次页面访问连带 CSS / JS / 图片）秒封，凡是仍等于旧默认值的
+    ///   配置一律放宽；用户想收紧回 10 在面板里改即可。
     ///
     /// 与 [`Config::normalize`] 分开是有意为之：迁移只改内存，是否落盘由调用方决定。
     /// 主程序启动时会把迁移结果立即写回配置文件——只改内存的话，第二个实例会拿着
     /// 文件里的旧端口去开面板，而正在运行的实例已经换到新端口了。
+    ///
+    /// 两条判定都按**值**而非结构版本：`normalize` 早在迁移之前就把版本号抬到当前
+    /// 版本了，按版本判定永远不会命中。
     pub fn migrate(&mut self) -> Vec<String> {
         let mut done = Vec::new();
         if self.panel.bind == LEGACY_PANEL_BIND {
@@ -349,6 +365,13 @@ impl Config {
             done.push(format!(
                 "面板监听地址 {} → {}（旧端口与其它软件冲突概率高）",
                 LEGACY_PANEL_BIND, self.panel.bind
+            ));
+        }
+        if self.protect.http.max_attempts == LEGACY_WEB_MAX_ATTEMPTS {
+            self.protect.http.max_attempts = DEFAULT_WEB_MAX_ATTEMPTS;
+            done.push(format!(
+                "TCP-WEB 累计连接阈值 {} → {}（旧值会把仅加载 CSS / JS / 图片的正常访客秒封）",
+                LEGACY_WEB_MAX_ATTEMPTS, DEFAULT_WEB_MAX_ATTEMPTS
             ));
         }
         done
@@ -393,7 +416,8 @@ impl Config {
 ///
 /// - 1：初版（面板默认端口 `127.0.0.1:18080`）
 /// - 2：面板默认端口改为 [`DEFAULT_PANEL_BIND`]（`127.0.0.1:58080`），加载时迁移旧值
-pub const CURRENT_CONFIG_VERSION: u32 = 2;
+/// - 3：TCP-WEB 默认累计连接阈值 10 → [`DEFAULT_WEB_MAX_ATTEMPTS`]（300），加载时迁移旧值
+pub const CURRENT_CONFIG_VERSION: u32 = 3;
 
 /// 清洗规则行：去空白、去空行、去注释行。
 fn normalize_rule_lines(lines: &[String]) -> Vec<String> {
@@ -413,6 +437,10 @@ mod tests {
         let c = Config::with_defaults();
         assert_eq!(c.protect.tcp.ports, vec![3389]);
         assert_eq!(c.protect.http.ports, vec![80, 443]);
+        // Web 类服务的阈值必须远高于普通 TCP：一次页面访问要连带 CSS / JS / 图片，
+        // 阈值 10 会把正常访客秒封（规范 4.2）
+        assert_eq!(c.protect.http.max_attempts, DEFAULT_WEB_MAX_ATTEMPTS);
+        assert_eq!(c.protect.tcp.max_attempts, 5);
         assert_eq!(c.ban.duration_seconds, 3600);
         assert_eq!(c.panel.bind, DEFAULT_PANEL_BIND);
         assert_eq!(c.panel.bind, "127.0.0.1:58080");
@@ -445,6 +473,30 @@ mod tests {
 
         // 迁移幂等：再跑一次无事发生
         assert!(partial.migrate().is_empty());
+    }
+
+    #[test]
+    fn 旧默认的_web_阈值被放宽() {
+        // 老版本写下的完整配置：TCP-WEB 阈值停在旧默认值 10
+        let mut old = Config::from_toml("config_version = 2\n[protect.http]\nports = [80, 443]\nmax_attempts = 10\n")
+            .unwrap();
+        let done = old.migrate();
+        assert_eq!(old.protect.http.max_attempts, DEFAULT_WEB_MAX_ATTEMPTS);
+        assert_eq!(done.len(), 1, "迁移必须如实上报：{:?}", done);
+        // 幂等：再跑一次无事发生
+        assert!(old.migrate().is_empty());
+
+        // 用户自己定过的阈值一律不动
+        let mut custom = Config::from_toml("[protect.http]\nports = [8080]\nmax_attempts = 50\n")
+            .unwrap();
+        assert!(custom.migrate().is_empty());
+        assert_eq!(custom.protect.http.max_attempts, 50);
+
+        // 普通 TCP / UDP 的默认阈值不受影响
+        let mut tcp = Config::from_toml("[protect.tcp]\nports = [3389]\nmax_attempts = 5\n")
+            .unwrap();
+        assert!(tcp.migrate().is_empty());
+        assert_eq!(tcp.protect.tcp.max_attempts, 5);
     }
 
     #[test]

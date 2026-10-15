@@ -547,10 +547,13 @@ function renderLogs() {
 
 /* ---------------- 渲染：设置 ---------------- */
 
+// max_attempts 是配置里缺该分组时的兜底值，必须与后面 `ProtectConfig::default` 一致：
+// TCP-WEB 阈值远高于普通 TCP，一次页面访问要连带 CSS / JS / 图片等数十个连接，
+// 阈值过低会把正常访客秒封。
 const PROTECT_GROUPS = [
-  { key: "tcp", name: "TCP 保护端口", hint: "普通 TCP 服务" },
-  { key: "http", name: "TCP-WEB 端口", hint: "Web 类服务，阈值可放宽" },
-  { key: "udp", name: "UDP 保护端口", hint: "UDP 服务" },
+  { key: "tcp", name: "TCP 保护端口", hint: "普通 TCP 服务", max_attempts: 5 },
+  { key: "http", name: "TCP-WEB 端口", hint: "Web 类服务，阈值可放宽", max_attempts: 300 },
+  { key: "udp", name: "UDP 保护端口", hint: "UDP 服务", max_attempts: 5 },
 ];
 
 function renderSettings() {
@@ -574,7 +577,7 @@ function renderSettings() {
   const box = $("protect-rows");
   box.textContent = "";
   for (const g of PROTECT_GROUPS) {
-    const rule = cfg.protect[g.key] || { ports: [], max_attempts: 5 };
+    const rule = cfg.protect[g.key] || { ports: [], max_attempts: g.max_attempts };
     box.appendChild(
       el("div", { class: "port-row" }, [
         el("span", { class: "port-name", text: g.name }),

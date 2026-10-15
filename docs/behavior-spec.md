@@ -282,10 +282,14 @@ permanent = 配置的 ban.permanent || reason == Manual
 - `max_attempts == 0` → 1；`ban.duration_seconds == 0` → 60；`geo.db` 为空 → 回退默认文件名
 - 名单行：去空白、去空行、去 `#` 注释行
 - `config_version` 低于当前版本时抬到当前版本
-- 面板监听地址若仍等于旧默认值 `127.0.0.1:18080`，迁移为 `DEFAULT_PANEL_BIND`（`127.0.0.1:58080`）。
-  迁移由 `Config::migrate()` 单独完成（与 `normalize` 分开），返回中文说明清单；
+- 面板监听地址若仍等于旧默认值 `127.0.0.1:18080`，迁移为 `DEFAULT_PANEL_BIND`（`127.0.0.1:58080`）
+- TCP-WEB 累计连接阈值若仍等于旧默认值 `10`，迁移为 `DEFAULT_WEB_MAX_ATTEMPTS`（`300`）。
+  旧阈值会封掉仅加载 CSS / JS / 图片的正常访客；用户想收紧回 10 在面板里改即可
+- 以上迁移由 `Config::migrate()` 单独完成（与 `normalize` 分开），返回中文说明清单；
   **主程序必须在启动时把迁移结果写回 `config.toml`**：只改内存的话，第二个实例会拿文件里的旧端口
   去开面板，而运行中的实例已经换到新端口，用户看到的就是「页面打不开」
+- 迁移判定一律按**值**而非结构版本：`normalize` 早于迁移执行，已经把 `config_version` 抬到当前版本，
+  按版本判定永远不会命中
 
 ### 8.3 保存流程
 
