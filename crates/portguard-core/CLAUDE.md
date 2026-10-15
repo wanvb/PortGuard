@@ -11,14 +11,15 @@
 | 模块 | pub 类型 / 关键函数 | 说明 |
 |------|------|------|
 | `model` | `Ip`（= `Ipv4Addr`）、`Protocol`、`TrafficDirection`、`PortGroup`、`TcpFlags`、`FlagClass`、`PacketInfo`、`BanReason`、`BanRecord`、`IgnoreCounters`、`Statistics` | 领域数据结构与 `Display`/`label`/`as_str` 辅助；`Statistics.ignored` 承载被丢弃数据包的分类计数；`TcpFlags::is_connection_request`（入站 SYN）与 `is_handshake_accepted`（出站 SYN+ACK）是两种连接事件来源 |
-| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`DEFAULT_PANEL_BIND`、`DEFAULT_WEB_MAX_ATTEMPTS`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/migrate/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（**默认 `true`**，规范 4.1 修订）；`DEFAULT_PANEL_BIND = "127.0.0.1:58080"`；`DEFAULT_WEB_MAX_ATTEMPTS = 300`（TCP-WEB 默认阈值，规范 4.2） |
+| `config` | `Config`、`ProtectionRule`、`ProtectConfig`、`PanelConfig`、`NetworkConfig`、`BanConfig`、`ListsConfig`、`RdpConfig`、`SystemConfig`、`LoggingConfig`、`GeoConfig`、`DEFAULT_GEO_DB`、`DEFAULT_PANEL_BIND`、`DEFAULT_WEB_MAX_ATTEMPTS`、`CURRENT_CONFIG_VERSION` | `Config::with_defaults/from_toml/to_toml/load/save/normalize/migrate/validate/has_any_protected_port`；`GeoConfig{enabled, db}` 默认开启、文件名可回退；`ProtectConfig.count_accept` 决定连接事件来源（**默认 `true`**，规范 4.1 修订）；`ProtectionRule.notes` / `ListsConfig.notes` 是纯展示备注（键为端口十进制字符串 / 规则原文），取用走 `ProtectionRule::note`、`ProtectConfig::port_note` / `port_note_any`、`ListsConfig::rule_note`；`DEFAULT_PANEL_BIND = "127.0.0.1:58080"`；`DEFAULT_WEB_MAX_ATTEMPTS = 300`（TCP-WEB 默认阈值，规范 4.2） |
+| `notes` | `Notes`、`MAX_NOTE_CHARS`、`clean`、`normalize`、`get` | 端口 / 名单规则的备注：纯展示元数据，不参与任何判定；`normalize` 负责清洗、丢弃空备注并清除「键已不在端口 / 名单里」的孤儿备注 |
 | `observe` | `Observer`、`Observation`、`MAX_ENTRIES`、`direction_label` | 纯诊断的抓包观测表：按「方向 + 协议 + 本机端口 + 标志类别」计数，`observe` / `top` / `count_matching` / `clear` / `overflow` |
 | `iprange` | `IpRange`、`IpSet`、`parse_ipv4`、`u32_to_ip` | 支持单 IP / 区间 / 末段通配 / CIDR / 多段通配；`IpSet::from_rules` 任一条非法即整体失败 |
 | `tracker` | `TrackKey`、`TrackEntry`、`ConnectionTracker` | `record` 返回**累计**事件次数；`prune`（条目回收即计数归零）、`remove_ip`、`iter_entries` |
 | `ban` | `RULE_PREFIX`、`ban_rule_name`、`is_own_rule`、`BanManager` | `make_record`、`ban`、`unban`、`take_expired`、`restore`、`snapshot` |
 | `engine` | `RuleEngine`、`Outcome`、`EngineStats`、`ConnectionRow`、`FLAG_SYN` | `new`、`reload`、`set_local_ip`、`evaluate`、`connection_rows`、`prune`、`protected_port_count`、`set_count_accept` / `count_accept`；`EngineStats.ignored` 与 `Outcome::Ignored` 的 `reason` 一一对应 |
 | `logging` | `Level`、`LogLine`、`LogBuffer` | `push`、`tail`、`render` |
-| `api` | `PortGuardApi`（trait）、`StatusView`、`ConnectionView`、`BanView`、`AdapterView`、`EventView`、`ObservedPortView`、`BanSource`、`ProtectionSwitch`、`protocol_label`、`reason_label` | 表现层唯一依赖面，全部方法必须快速返回；`StatusView` 含 `geo_ready` / `geo_status` / `parse_errors` / `parse_samples` / `observed` / `count_accept`，`ConnectionView` / `BanView` 含 `location`（纯展示，规范 22） |
+| `api` | `PortGuardApi`（trait）、`StatusView`、`ConnectionView`、`BanView`、`AdapterView`、`EventView`、`ObservedPortView`、`BanSource`、`ProtectionSwitch`、`protocol_label`、`reason_label` | 表现层唯一依赖面，全部方法必须快速返回；`StatusView` 含 `geo_ready` / `geo_status` / `parse_errors` / `parse_samples` / `observed` / `count_accept`，`ConnectionView` / `BanView` 含 `location` / `port_note` / `ip_note`（三者均纯展示，规范 22） |
 | `error` | `AppError`、`Result<T>` | 全项目统一错误类型 |
 | `time` | `now_ms`、`format_ms`、`format_ms_with_offset`、`DEFAULT_UTC_OFFSET_MINUTES` | 纯整数民用历法换算，不引入 chrono |
 | 顶层 | `VERSION`（取自 `CARGO_PKG_VERSION`） | — |
@@ -28,7 +29,8 @@
 - 生产代码禁止 `unwrap()` / `expect()`，统一 `Result<T, AppError>` 向上传播；`lib.rs` 以 `#![deny(clippy::unwrap_used, clippy::expect_used)]` 强制，测试经 `cfg_attr(test, allow(...))` 豁免（规范 27）。
 - 判定顺序唯一权威实现在 `engine.rs`：白名单 → 黑名单 → 保护端口 → 累计次数阈值 → 封停（规范 5.1）。
 - 阈值判定用**累计连接次数**，不做滑动窗口：`count >= max_attempts` 即封停。计数唯一的归零路径是条目空闲超保留期被 `prune` 回收（保留期由 `portguard-app` 的 `TRACK_RETENTION_MS` 决定，当前 10 分钟）。禁止重新引入按时间滑出的窗口计数：稀疏但反复的连接会因此永远够不到阈值，表现为「面板累计次数一直涨却从不封停」的漏封（规范 5.1 修订）。
-- `ProtectionRule` 只有 `ports` 与 `max_attempts` 两个字段：`window_seconds` 已废弃，不得再以任何形式加回（旧 `config.toml` 里残留的该字段由 serde 静默忽略，不需要兼容分支）。
+- `ProtectionRule` 只有 `ports` / `max_attempts` / `notes` 三个字段：`window_seconds` 已废弃，不得再以任何形式加回（旧 `config.toml` 里残留的该字段由 serde 静默忽略，不需要兼容分支）。
+- **备注（`notes`）是纯展示元数据**：只用于在面板上回答「这个端口 / 这条规则是谁在用的」，**绝不参与端口匹配、名单解析、阈值判定与封停**（与地理位置同口径，规范 22）。因此它必须与 `ports` / `whitelist` / `blacklist` 分开存放（平行映射），端口保持 `Vec<u16>`、名单保持 `Vec<String>`，判定链路不得为了备注改动输入类型。键只能是字符串（TOML map 键不支持整数）：端口用十进制字符串，名单用规则原文，含 `.` `*` `/` 的键由写入器自动加引号。`Config::normalize` 必须清理孤儿备注（端口 / 规则被删掉后备注一并消失），否则备注会在 `config.toml` 里越积越多，用户重新加回同一个端口时还会看到过期备注。
 - 白名单优先最高，任何路径（threshold / blacklist / manual / restore）都不得封停白名单 IP（规范 26.2）；`BanManager::ban` 命中白名单必须返回 `Err`，不得假装成功。
 - 白名单命中即返回，**不参与阈值判定**；但可计数的包（TCP 为 `SYN && !ACK`、UDP 任意报文）在端口属于某保护组时会经 `record_display_only` 写入跟踪表，仅用于面板展示 `WHITELIST` 状态，不得累加阈值、不得产生封停。
 - 判定中每条丢弃路径都必须累加对应的 `IgnoreCounters`，禁止新增无计数的静默丢弃分支（否则面板无法区分抓包问题与判定问题）。
@@ -47,11 +49,12 @@
 
 ## 测试
 - 位置：各源文件内联 `#[cfg(test)] mod tests`。
-- 分布：`ban.rs` 11、`config.rs` 15、`engine.rs` 31、`iprange.rs` 11、`logging.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
-- 合计 `#[test]`：92 个。
+- 分布：`ban.rs` 11、`config.rs` 20、`engine.rs` 31、`iprange.rs` 11、`logging.rs` 5、`notes.rs` 5、`observe.rs` 5、`time.rs` 5、`tracker.rs` 9。
+- 合计 `#[test]`：102 个。
 - 关键用例：
   - `ban`：白名单地址手动封停同样被拒绝、永久封停不会被临时封停降级、恢复时丢弃白名单记录并可用到期回收清理防火墙、规则名前缀可识别归属。
-  - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝、旧默认面板端口被迁移到新端口（迁移幂等且会如实上报）、旧默认的 TCP-WEB 阈值被放宽（自定义阈值与 TCP / UDP 组不受影响）。
+  - `config`：空文件解析为默认值、只写面板段时保护端口不丢失、注释与空行在规范化时被剔除、三组保护端口全空被校验拒绝、旧默认面板端口被迁移到新端口（迁移幂等且会如实上报）、旧默认的 TCP-WEB 阈值被放宽（自定义阈值与 TCP / UDP 组不受影响）、备注随配置往返且空备注不落盘、端口或名单规则被删掉后备注不残留、旧配置缺少备注字段也能解析、按分组与按端口取备注。
+  - `notes`：清洗去掉空白与换行、超长备注按字符截断且不切碎中文、端口被删掉后备注一并清除、空备注不留在表里、空串视为没有备注。
   - `engine`：白名单优先于黑名单、累计达到阈值即封停、累计计数不因时间间隔归零、入站口径（`count_accept = false`）下握手响应不算新连接、默认配置下入站 SYN 不再计数、打开后出站 SYN+ACK 计一次、两种事件来源互斥不会重复计数（阈值不折半）、同端口同时属于两组时两组独立计数、非法白名单不会清空既有规则、五类忽略原因分别计数、白名单地址留下展示记录但绝不封停。
   - `observe`：入站与出站分别归类、同键累计次数、条目上限不会无限增长、可按条件统计服务端口、非本机流量归入端口零。
   - `iprange`：区间写反时自动纠正、多段通配、非尾部通配判定非法、规则集遇非法规则整体失败。

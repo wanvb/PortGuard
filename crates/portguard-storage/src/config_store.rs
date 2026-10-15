@@ -20,6 +20,10 @@ const TEMPLATE_HEADER: &str = r#"# PortGuard 配置文件
 #   1.2.3.4-1.2.3.9    地址区间
 # 以 # 开头的行会被忽略。
 # ---------------------------------------------------------------
+# 各段的 notes 表是备注（这个端口 / 这条规则是谁在用的），仅供面板展示，
+# 不参与任何判定；端口或规则删掉后，对应备注会在下次保存时自动清除。
+# 备注的键含 . * / 时会被自动加引号（如 "1.2.3.0/24" = "办公网段"），手改请保留引号。
+# ---------------------------------------------------------------
 
 "#;
 
@@ -185,6 +189,33 @@ mod tests {
         assert_eq!(back.lists.whitelist, vec!["192.168.1.*"]);
         assert_eq!(back.ban.duration_seconds, 120);
         assert!(!store.path().with_extension("toml.tmp").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn 备注随配置落盘且删端口后不再写回() {
+        let d = tmpdir("notes");
+        let store = ConfigStore::new(d.join("config.toml"));
+        let (_, _) = store.load_or_create().unwrap();
+
+        let mut cfg = Config::with_defaults();
+        cfg.protect.tcp.ports = vec![3389, 33890];
+        cfg.protect.tcp.notes.insert("33890".to_string(), "frp: 财务系统".to_string());
+        cfg.lists.whitelist = vec!["192.168.1.0/24".to_string()];
+        cfg.lists.notes.insert("192.168.1.0/24".to_string(), "办公网段".to_string());
+        store.save(&cfg).unwrap();
+
+        let (back, _) = store.load_or_create().unwrap();
+        assert_eq!(back.protect.tcp.note(33890), "frp: 财务系统");
+        assert_eq!(back.lists.rule_note("192.168.1.0/24"), "办公网段");
+
+        // 端口被删掉后再保存：备注不允许残留在文件里
+        let mut cfg = back;
+        cfg.protect.tcp.ports.retain(|p| *p != 33890);
+        store.save(&cfg).unwrap();
+        let text = std::fs::read_to_string(store.path()).unwrap();
+        assert!(!text.contains("frp: 财务系统"), "已删端口的备注不应留在文件里：{}", text);
+        assert!(text.contains("办公网段"), "名单备注应保留：{}", text);
         let _ = std::fs::remove_dir_all(&d);
     }
 

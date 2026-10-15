@@ -800,6 +800,51 @@ textarea {
   font-family: var(--mono);
 }
 
+/* 备注网格：端口 / 名单规则下方逐条一行，键右对齐、输入框占满剩余宽度 */
+.note-grid {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* .port-row 是横向 flex，备注网格必须整行换行铺满 */
+.port-row .note-grid {
+  flex: 0 0 100%;
+}
+
+.note-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.note-row .note-key {
+  flex: 0 0 104px;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.note-row .note-input {
+  flex: 1;
+  min-width: 160px;
+  font-size: 13px;
+}
+
+.note-empty {
+  font-size: 12.5px;
+}
+
+/* 数据表里的备注：跟在 IP / 端口后面，浅色小字，没有备注时不占位 */
+.note-tag {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
 .form-actions {
   display: flex;
   align-items: center;

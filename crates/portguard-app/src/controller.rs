@@ -185,16 +185,22 @@ impl PortGuardApi for Controller {
     }
 
     fn connections(&self) -> Vec<ConnectionView> {
+        let cfg = self.rt.config();
         let mut rows = self.rt.read(|inner| inner.connection_rows());
         for row in rows.iter_mut() {
             let location = self.location_of(&row.ip);
             row.location = location;
+            // 备注与地理位置同为纯展示字段：锁内取完快照、锁外查配置填充，
+            // 判定路径完全不接触备注（规范 22 同款口径）
+            row.port_note = cfg.protect.port_note(&row.group, row.service_port).to_string();
+            row.ip_note = cfg.lists.rule_note(&row.ip).to_string();
         }
         rows
     }
 
     fn bans(&self) -> Vec<BanView> {
         let now = now_ms();
+        let cfg = self.rt.config();
         let mut rows: Vec<BanView> = self.rt.read(|inner| {
             let mut rows: Vec<BanView> = inner
                 .bans
@@ -214,6 +220,8 @@ impl PortGuardApi for Controller {
                     remaining_seconds: r.remaining_seconds(now),
                     rule_name: r.rule_name.clone(),
                     location: String::new(),
+                    port_note: String::new(),
+                    ip_note: String::new(),
                 })
                 .collect();
             // 最新的排在最前
@@ -224,6 +232,12 @@ impl PortGuardApi for Controller {
         for row in rows.iter_mut() {
             let location = self.location_of(&row.ip);
             row.location = location;
+            // 封停记录只记端口、不记分组，按 TCP → TCP-WEB → UDP 取第一个命中的备注
+            row.port_note = row
+                .service_port
+                .map(|p| cfg.protect.port_note_any(p).to_string())
+                .unwrap_or_default();
+            row.ip_note = cfg.lists.rule_note(&row.ip).to_string();
         }
         rows
     }
@@ -531,6 +545,28 @@ mod tests {
         c.blacklist_add("10.1.1.1").unwrap();
         c.blacklist_add("10.1.1.1").unwrap();
         assert_eq!(c.config().lists.blacklist.len(), 1);
+    }
+
+    #[test]
+    fn 备注随端口与名单落盘并在删除后清除() {
+        let (c, paths) = controller();
+        let mut cfg = c.config();
+        cfg.protect.tcp.ports = vec![3389, 33890];
+        cfg.protect.tcp.notes.insert("33890".to_string(), "frp: 财务系统".to_string());
+        cfg.lists.whitelist = vec!["203.0.113.5".to_string()];
+        cfg.lists.notes.insert("203.0.113.5".to_string(), "办公机 · 张三".to_string());
+        c.save_config(cfg).unwrap();
+
+        let saved = c.config();
+        assert_eq!(saved.protect.tcp.note(33890), "frp: 财务系统");
+        let text = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(text.contains("frp: 财务系统"), "备注必须落盘：{}", text);
+
+        // 从名单里删掉这条规则（备注的键就是规则原文，跟着一起清）
+        c.whitelist_remove("203.0.113.5").unwrap();
+        assert!(c.config().lists.notes.is_empty());
+        let text = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(!text.contains("办公机"), "规则删掉后备注不应留在文件里：{}", text);
     }
 
     #[test]

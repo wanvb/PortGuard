@@ -63,6 +63,8 @@ impl MockApi {
                     remaining_seconds: Some(1200),
                     rule_name: "PortGuard-Ban-203.0.113.9".to_string(),
                     location: "中国 · 北京市 · 北京市 · 联通".to_string(),
+                    port_note: "远程桌面".to_string(),
+                    ip_note: String::new(),
                 }],
                 connections: vec![ConnectionView {
                     ip: "198.51.100.7".to_string(),
@@ -75,6 +77,8 @@ impl MockApi {
                     state: "TRACKING".to_string(),
                     whitelisted: false,
                     location: "中国 · 福建省 · 福州市 · 中国电信".to_string(),
+                    port_note: "远程桌面".to_string(),
+                    ip_note: "办公机 · 张三".to_string(),
                 }],
                 logs: vec![LogLine {
                     ts_ms: 1_700_000_000_000,
@@ -150,6 +154,8 @@ impl MockApi {
                 remaining_seconds: if permanent { None } else { Some(3600) },
                 rule_name: format!("PortGuard-Ban-{}", text),
                 location: "保留地址".to_string(),
+                port_note: String::new(),
+                ip_note: String::new(),
             });
         }
         state.connections.retain(|c| c.ip != text);

@@ -227,8 +227,14 @@ function protectedPortsText(s) {
   const protect = state.config && state.config.protect;
   if (!protect) return "TCP / TCP-WEB / UDP 合计";
   const fmt = (g) => {
-    const ports = (protect[g] && protect[g].ports) || [];
-    return ports.length ? ports.join(",") : "未设置";
+    const rule = protect[g] || {};
+    const ports = rule.ports || [];
+    if (!ports.length) return "未设置";
+    // 带上备注，让「这个端口是谁在用的」在概览页就能看到
+    const notes = rule.notes || {};
+    return ports
+      .map((p) => (notes[String(p)] ? `${p}(${notes[String(p)]})` : String(p)))
+      .join(",");
   };
   if (!s.protected_ports) return "三组均未设置，不会统计与封停";
   return `TCP ${fmt("tcp")} · WEB ${fmt("http")} · UDP ${fmt("udp")}`;
@@ -376,6 +382,11 @@ function kindClass(kind) {
   return "other";
 }
 
+/** 备注内联展示：没有备注时返回 null，调用方直接跳过（不占位）。 */
+function noteTag(text) {
+  return text ? el("span", { class: "muted note-tag", text: text }) : null;
+}
+
 /* ---------------- 渲染：连接表 ---------------- */
 
 function renderConnections() {
@@ -412,10 +423,10 @@ function renderConnections() {
     const level = ratio >= 1 ? "danger" : ratio >= 0.6 ? "warn" : "";
 
     const row = el("tr", { class: c.whitelisted ? "whitelisted" : "" });
-    row.appendChild(el("td", { class: "mono", text: c.ip }));
+    row.appendChild(el("td", { class: "mono" }, [c.ip, noteTag(c.ip_note)]));
     row.appendChild(el("td", { class: "muted", text: c.location || "未知" }));
     row.appendChild(el("td", {}, [el("span", { class: "badge group", text: c.group })]));
-    row.appendChild(el("td", { class: "mono", text: String(c.service_port) }));
+    row.appendChild(el("td", { class: "mono" }, [String(c.service_port), noteTag(c.port_note)]));
     row.appendChild(
       el("td", {
         title: `累计连接 ${c.count} 次，达到阈值 ${c.threshold} 次即封停`,
@@ -492,12 +503,15 @@ function renderBans() {
 
   for (const b of state.bans) {
     const row = el("tr", { class: "banned" });
-    row.appendChild(el("td", { class: "mono", text: b.ip }));
+    row.appendChild(el("td", { class: "mono" }, [b.ip, noteTag(b.ip_note)]));
     row.appendChild(el("td", { class: "muted", text: b.location || "未知" }));
     row.appendChild(el("td", { text: b.reason_label || b.reason }));
     row.appendChild(el("td", { class: "mono", text: b.protocol || "-" }));
     row.appendChild(
-      el("td", { class: "mono", text: b.service_port ? String(b.service_port) : "-" })
+      el("td", { class: "mono" }, [
+        b.service_port ? String(b.service_port) : "-",
+        noteTag(b.port_note),
+      ])
     );
     row.appendChild(el("td", { class: "mono", text: fmtNumber(b.attempt_count) }));
     row.appendChild(el("td", { class: "mono muted", text: fmtTime(b.created_at_ms) }));
@@ -556,9 +570,93 @@ const PROTECT_GROUPS = [
   { key: "udp", name: "UDP 保护端口", hint: "UDP 服务", max_attempts: 5 },
 ];
 
+/* ---------------- 备注编辑（纯展示字段，不参与判定） ----------------
+   端口与名单规则的下方各有一张备注网格：一行一个键 + 一个备注输入框。
+   网格按输入框里当前的端口 / 规则实时重建，因此备注缓存在客户端：
+   重建时从缓存取值，用户正在输入的内容不会被冲掉。 */
+
+let noteCache = {}; // `${范围}:${键}` → 备注
+
+const noteKey = (scope, key) => scope + ":" + key;
+
+/** 记下用户正在输入的备注（尚未保存，但网格重建后要能还原）。 */
+function cacheNote(scope, key, value) {
+  if (value) noteCache[noteKey(scope, key)] = value;
+  else delete noteCache[noteKey(scope, key)];
+}
+
+/** 从服务端配置装载某个范围的备注（每次重渲染设置页时整体重建缓存）。 */
+function loadNotes(scope, map) {
+  for (const [k, v] of Object.entries(map || {})) cacheNote(scope, k, v);
+}
+
+/** 按当前键取出要提交的备注表；缓存里的其余条目（已删掉的键）一律不带。 */
+function pickNotes(scope, keys) {
+  const out = {};
+  for (const k of keys) {
+    const v = (noteCache[noteKey(scope, k)] || "").trim();
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
+/** 去重且保持先后顺序。 */
+function uniqueKeys(list) {
+  return [...new Set(list)];
+}
+
+/** 端口输入框里当前合法的端口（输入过程中非法内容静默跳过，不在这里报错）。 */
+function portNoteKeys(group) {
+  const input = document.querySelector(`[data-group="${group}"][data-field="ports"]`);
+  const ports = (input.value || "")
+    .split(/[,，\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((s) => Number(s))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535)
+    .map((n) => String(n));
+  return uniqueKeys(ports);
+}
+
+/** 名单输入框里当前的规则（键就是规则原文，与后端一致）。 */
+function ruleNoteKeys(id) {
+  return uniqueKeys(splitLines($(id).value));
+}
+
+/** 渲染一张备注网格：一行一个键 + 一个备注框。 */
+function renderNoteGrid(box, scope, keys) {
+  box.textContent = "";
+  if (!keys.length) {
+    box.appendChild(
+      el("div", { class: "muted note-empty", text: "填写端口 / 规则后，这里会逐条出现备注输入框" })
+    );
+    return;
+  }
+  for (const key of keys) {
+    const input = el("input", {
+      type: "text",
+      class: "note-input",
+      maxlength: "64",
+      value: noteCache[noteKey(scope, key)] || "",
+      placeholder: "备注：谁在用 / 哪个业务",
+    });
+    input.addEventListener("input", () => cacheNote(scope, key, input.value.trim()));
+    box.appendChild(
+      el("div", { class: "note-row" }, [
+        el("span", { class: "note-key", text: key }),
+        input,
+      ])
+    );
+  }
+}
+
 function renderSettings() {
   const cfg = state.config;
   if (!cfg) return;
+
+  // 备注缓存以服务端配置为准整体重建（保存后 / 进入设置页时各一次）
+  noteCache = {};
+  loadNotes("lists", cfg.lists.notes);
 
   $("cfg-bind").value = cfg.panel.bind;
   $("cfg-ban-duration").value = cfg.ban.duration_seconds;
@@ -578,17 +676,24 @@ function renderSettings() {
   box.textContent = "";
   for (const g of PROTECT_GROUPS) {
     const rule = cfg.protect[g.key] || { ports: [], max_attempts: g.max_attempts };
+    loadNotes(g.key, rule.notes);
+
+    const grid = el("div", { class: "note-grid", id: "notes-" + g.key });
+    const ports = el("input", {
+      type: "text",
+      value: (rule.ports || []).join(","),
+      placeholder: "如 3389,22",
+      "data-group": g.key,
+      "data-field": "ports",
+      title: g.hint,
+    });
+    // 端口一改就重建备注网格；只重建网格容器，输入框本身不重渲染，焦点不丢
+    ports.addEventListener("input", () => renderNoteGrid(grid, g.key, portNoteKeys(g.key)));
+
     box.appendChild(
       el("div", { class: "port-row" }, [
         el("span", { class: "port-name", text: g.name }),
-        el("input", {
-          type: "text",
-          value: (rule.ports || []).join(","),
-          placeholder: "如 3389,22",
-          "data-group": g.key,
-          "data-field": "ports",
-          title: g.hint,
-        }),
+        ports,
         el("span", { class: "muted", text: "累计连接" }),
         el("input", {
           type: "number",
@@ -599,9 +704,15 @@ function renderSettings() {
           title: "累计连接次数达到该值即封停；该来源空闲 10 分钟后计数归零",
         }),
         el("span", { class: "muted", text: "次即封停" }),
+        grid,
       ])
     );
+    renderNoteGrid(grid, g.key, portNoteKeys(g.key));
   }
+
+  // 名单规则的备注网格（键是规则原文，黑白名单共用一张备注表）
+  renderNoteGrid($("notes-whitelist"), "lists", ruleNoteKeys("cfg-whitelist"));
+  renderNoteGrid($("notes-blacklist"), "lists", ruleNoteKeys("cfg-blacklist"));
 
   // 系统开关（与概览里的快捷开关等价，这里随配置一起保存）
   const sw = $("system-switches");
@@ -659,6 +770,8 @@ function collectSettings() {
   base.ban.permanent = $("cfg-ban-permanent").checked;
   base.lists.whitelist = splitLines($("cfg-whitelist").value);
   base.lists.blacklist = splitLines($("cfg-blacklist").value);
+  // 备注必须写回：整份配置提交时缺了它会被后端按字段默认值当成空表，把用户备注清掉
+  base.lists.notes = pickNotes("lists", ruleNoteKeys("cfg-whitelist").concat(ruleNoteKeys("cfg-blacklist")));
   base.rdp.enabled = $("cfg-rdp-enabled").checked;
   base.rdp.client_whitelist = splitLines($("cfg-rdp-list").value);
   base.logging.level = $("cfg-log-level").value;
@@ -674,6 +787,8 @@ function collectSettings() {
     // 「map 喂给 Vec<u16>」而报请求体格式错误
     base.protect[g.key].ports = collectPorts(g.key).ports;
     base.protect[g.key].max_attempts = collectNumber(g.key, "max_attempts");
+    // 只提交当前端口上的备注，已删掉的端口不带备注（后端也会再清一次）
+    base.protect[g.key].notes = pickNotes(g.key, (base.protect[g.key].ports || []).map(String));
   }
 
   base.protect.count_accept = $("cfg-count-accept").checked;
@@ -862,6 +977,14 @@ function bindEvents() {
 
   $("filter-connections").addEventListener("input", renderConnections);
   $("log-filter").addEventListener("change", renderLogs);
+
+  // 名单一改就重建该名单的备注网格（端口输入框是动态创建的，监听在渲染时挂）
+  $("cfg-whitelist").addEventListener("input", () =>
+    renderNoteGrid($("notes-whitelist"), "lists", ruleNoteKeys("cfg-whitelist"))
+  );
+  $("cfg-blacklist").addEventListener("input", () =>
+    renderNoteGrid($("notes-blacklist"), "lists", ruleNoteKeys("cfg-blacklist"))
+  );
 
   $("btn-adapters-refresh").addEventListener("click", refreshAdapters);
   $("btn-reload").addEventListener("click", () => {

@@ -307,6 +307,33 @@ fn 保存配置生效() {
 }
 
 #[test]
+fn 端口与名单备注随配置往返并可展示() {
+    let h = Harness::start();
+
+    let body = split_response(&h.get("/api/config")).1;
+    let mut cfg: serde_json::Value = serde_json::from_str(&body).unwrap();
+    // 端口备注的键是十进制字符串，名单备注的键是规则原文
+    cfg["protect"]["tcp"]["ports"] = serde_json::json!([3389, 33890]);
+    cfg["protect"]["tcp"]["notes"] = serde_json::json!({ "33890": "frp: 财务系统" });
+    cfg["lists"]["notes"] = serde_json::json!({ "10.0.0.1": "办公机 · 张三" });
+
+    let (head, out) = split_response(&h.post("/api/config", &cfg.to_string()));
+    assert!(head.contains("200"), "保存带备注的配置失败：{} {}", head, out);
+
+    let back: serde_json::Value =
+        serde_json::from_str(&split_response(&h.get("/api/config")).1).unwrap();
+    assert_eq!(back["protect"]["tcp"]["notes"]["33890"], "frp: 财务系统");
+    assert_eq!(back["lists"]["notes"]["10.0.0.1"], "办公机 · 张三");
+
+    // 数据表页的备注由后端随视图下发，前端只负责内联显示
+    let state: serde_json::Value =
+        serde_json::from_str(&split_response(&h.get("/api/state")).1).unwrap();
+    assert_eq!(state["connections"][0]["port_note"], "远程桌面");
+    assert_eq!(state["connections"][0]["ip_note"], "办公机 · 张三");
+    assert_eq!(state["bans"][0]["port_note"], "远程桌面");
+}
+
+#[test]
 fn 非法配置被拒绝且不落盘() {
     let h = Harness::start();
     let body = split_response(&h.get("/api/config")).1;

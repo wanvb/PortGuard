@@ -519,14 +519,17 @@ mod tests {
         c.protect.tcp = ProtectionRule {
             ports: vec![3389],
             max_attempts: 3,
+            ..ProtectionRule::default()
         };
         c.protect.http = ProtectionRule {
             ports: vec![80],
             max_attempts: 5,
+            ..ProtectionRule::default()
         };
         c.protect.udp = ProtectionRule {
             ports: vec![53],
             max_attempts: 2,
+            ..ProtectionRule::default()
         };
         c
     }
@@ -711,6 +714,7 @@ mod tests {
         cfg.protect.tcp = ProtectionRule {
             ports: vec![],
             max_attempts: 99,
+            ..ProtectionRule::default()
         };
         let mut e = RuleEngine::new(&cfg, ip(LOCAL));
         e.evaluate(&syn_packet(PEER, 80, 1_000));
@@ -731,10 +735,12 @@ mod tests {
         cfg.protect.tcp = ProtectionRule {
             ports: vec![8080],
             max_attempts: 99,
+            ..ProtectionRule::default()
         };
         cfg.protect.http = ProtectionRule {
             ports: vec![8080],
             max_attempts: 2,
+            ..ProtectionRule::default()
         };
         let mut e = RuleEngine::new(&cfg, ip(LOCAL));
         e.evaluate(&syn_packet(PEER, 8080, 1_000));

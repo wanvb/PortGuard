@@ -9,6 +9,7 @@
 //! |------|------|
 //! | [`model`] | 领域数据结构 |
 //! | [`config`] | 配置模型与 TOML 读写 |
+//! | [`notes`] | 端口 / 名单规则的备注（纯展示） |
 //! | [`iprange`] | IP 规则解析与匹配 |
 //! | [`tracker`] | 滑动窗口连接跟踪 |
 //! | [`ban`] | 封停状态机 |
@@ -29,6 +30,7 @@ pub mod error;
 pub mod iprange;
 pub mod logging;
 pub mod model;
+pub mod notes;
 pub mod observe;
 pub mod time;
 pub mod tracker;

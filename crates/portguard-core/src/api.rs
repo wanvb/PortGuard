@@ -90,6 +90,10 @@ pub struct ConnectionView {
     pub whitelisted: bool,
     /// 来源 IP 的地理位置，仅供展示（查不到为「未知」，规范 22）。
     pub location: String,
+    /// 该行服务端口的备注，仅供展示（无备注为空串）。
+    pub port_note: String,
+    /// 来源 IP 在名单里的备注，仅供展示（无备注为空串）。
+    pub ip_note: String,
 }
 
 /// 「封停列表」行。
@@ -111,6 +115,10 @@ pub struct BanView {
     pub rule_name: String,
     /// 被封停 IP 的地理位置，仅供展示（查不到为「未知」，规范 22）。
     pub location: String,
+    /// 封停端口的备注，仅供展示（无备注为空串）。
+    pub port_note: String,
+    /// 被封停 IP 在名单里的备注，仅供展示（无备注为空串）。
+    pub ip_note: String,
 }
 
 /// 网卡列表项。

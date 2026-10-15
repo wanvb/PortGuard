@@ -37,13 +37,14 @@
 - **服务模式**（`--service`）：由 Windows 服务管理器（SCM）以 LocalSystem 在会话 0 拉起（服务项由 `portguard_win::Service` 注册），既不建托盘也不自动打开浏览器（`should_open_browser` 三条件之一）。
 - **服务分发必须抢在读配置与单实例之前**：`main::run` 解析参数后发现 `opts.service` 立即调用 `portguard_win::Service::run(move || run_app(opts))`；主体逻辑抽在 `run_app(opts)` 里。一旦落在分发之后，「已有实例在运行」这条早退路径会让 SCM 空等到 30 秒超时，用户看到的是 1053「服务没有及时响应启动或控制请求」。单实例早退在服务模式下不再尝试开浏览器（会话 0 无桌面，只会失败刷日志）。
 - **服务开关只改「是否注册」**：`Controller::set_protection` 的 `Autostart` 分支先 `Service::install` / `Service::uninstall`，成功后才写 `system.autostart` 并落盘；防火墙 / 服务操作失败一律向上返回错误，不得只改配置假装成功（规范 26.1）。勾选不立即启动服务，下次开机由 SCM 拉起。
+- **备注与地理位置一样由 controller 在锁外填充**：`ConnectionView.port_note` / `ip_note` 与 `BanView.port_note` / `ip_note` 都是纯展示字段，`connections()` / `bans()` 先在锁内取快照，再按 `ProtectConfig::port_note` / `port_note_any` 与 `ListsConfig::rule_note` 查配置填充；`runtime` 侧只把这两个字段留空，判定路径不接触备注。
 - **地理位置在运行期锁之外查询**（规范 22）：`connections()` / `bans()` 先在锁内取快照、释放锁，再用 `location_of` 逐行填充 `location`；抓包线程与判定路径完全不接触 `portguard-geo`。
 - **地理位置库可在运行期重载**：`save_config` 检测到 `geo` 段变化时立即 `reload_geo`，避免「改了设置但没生效」的静默失效；`geo_candidates` 按「数据目录 → 程序目录」给出候选路径。
 
 ## 测试
 - 位置：内联 `#[cfg(test)] mod tests`（`cli.rs` / `main.rs` / `controller.rs` / `runtime.rs`）。
-- 关键用例：`默认选项符合预期` / `默认隐藏控制台窗口` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长` / `封停后跟踪行保留并标记状态` / `保护端口为空时启动会写入告警事件` / `观测表记录被判定层丢弃的包` / `入站不可见时自动改用握手响应` / `入站可见时不做自动切换` / `用户显式设置后不再自动改写`。
-- 测试数量：33 个 `#[test]`（cli 7、main 3、controller 11、runtime 12）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
+- 关键用例：`默认选项符合预期` / `默认隐藏控制台窗口` / `未知参数给出中文提示`、`面板地址解析支持主机与端口`、`白名单地址拒绝手动封停` / `加入白名单会写入配置文件` / `备注随端口与名单落盘并在删除后清除` / `非法配置被拒绝且不覆盖已保存的文件` / `切换非法网卡地址被拒绝`、`单个实例只发放一次封停动作` / `白名单不产生封停动作` / `未选择网卡时启动会明确报错` / `事件流不会无限增长` / `封停后跟踪行保留并标记状态` / `保护端口为空时启动会写入告警事件` / `观测表记录被判定层丢弃的包` / `入站不可见时自动改用握手响应` / `入站可见时不做自动切换` / `用户显式设置后不再自动改写`。
+- 测试数量：34 个 `#[test]`（cli 7、main 3、controller 12、runtime 12）；`main` 侧含 `自动打开浏览器受三条件约束`，controller 侧含 `地理位置库候选路径优先数据目录` / `数据库缺失时地理位置恒为未知` / `保存配置后地理位置库立即重载`。
 
 ## 依赖关系
 - 依赖：`portguard-core`、`portguard-packet`、`portguard-firewall`、`portguard-storage`、`portguard-win`、`portguard-rdp`、`portguard-geo`、`portguard-web`，以及 `serde` / `serde_json` / `thiserror` / `windows`。

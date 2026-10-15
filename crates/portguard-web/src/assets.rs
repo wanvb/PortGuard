@@ -109,6 +109,23 @@ mod tests {
     }
 
     #[test]
+    fn 设置页提供端口与名单备注挂载点() {
+        // 名单备注网格是静态挂载点（三组端口的网格由脚本按分组拼 id 动态生成）
+        for id in ["id=\"notes-whitelist\"", "id=\"notes-blacklist\""] {
+            assert!(INDEX_HTML.contains(id), "首页缺少备注挂载点 {}", id);
+        }
+        let js = lookup("/assets/app.js").unwrap().body;
+        assert!(js.contains("\"notes-\" + g.key"), "端口备注网格 id 必须跟随分组生成");
+        assert!(js.contains("renderNoteGrid"), "脚本缺少备注网格渲染");
+        assert!(js.contains("portNoteKeys"), "脚本缺少端口备注键解析");
+        // 备注必须随整份配置写回：漏掉就会被后端按字段默认值清空（历史同类故障）
+        assert!(js.contains("notes = pickNotes("), "collectSettings 必须写回备注字段");
+        let css = lookup("/assets/style.css").unwrap().body;
+        assert!(css.contains(".note-grid"), "样式表缺少备注网格规则");
+        assert!(css.contains(".note-tag"), "样式表缺少数据表备注规则");
+    }
+
+    #[test]
     fn 资源可按键路径查到() {
         let css = lookup("/assets/style.css").unwrap();
         assert!(css.mime.starts_with("text/css"));

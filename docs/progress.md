@@ -1,7 +1,7 @@
 # PortGuard 开发进度
 
 > 最后更新：2026-10-15
-> 测试规模：**274 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
+> 测试规模：**288 项全部通过**（`cargo test --workspace`），`cargo clippy --workspace --all-targets` 零警告。
 
 ---
 
@@ -9,16 +9,16 @@
 
 | 模块 | 测试数 | 状态 |
 | --- | --- | --- |
-| `portguard-core` | 92 | 完成 |
+| `portguard-core` | 102 | 完成 |
 | `portguard-packet` | 18 | 完成 |
 | `portguard-firewall` | 10 | 完成 |
-| `portguard-storage` | 19 | 完成 |
+| `portguard-storage` | 20 | 完成 |
 | `portguard-rdp` | 19 | 完成 |
 | `portguard-win` | 30 | 完成 |
 | `portguard-geo` | 18 | 完成 |
-| `portguard-web` | 35 | 完成 |
-| `portguard-app` | 33 | 完成 |
-| **合计** | **274** | — |
+| `portguard-web` | 37 | 完成 |
+| `portguard-app` | 34 | 完成 |
+| **合计** | **288** | — |
 
 ---
 
@@ -498,6 +498,52 @@
 ### Known Issues
 
 - 极矮窗口（可视高度 < 400px）下表体随之变矮，属预期行为；如需保底高度可再加 `min-height` 下限
+
+---
+
+## Phase 24 — 端口与白/黑名单备注（标识说明）
+
+**背景**：服务器上经 frp 穿透的端口较多，三组保护端口与白/黑名单规则只有一个裸值，
+看不出某个端口属于哪个业务、某条规则是谁在用，排查连接与封停记录时要来回翻文档。
+
+### Completed
+
+- **存储形态：平行映射，不动判定输入**（`portguard-core/src/config.rs`）：
+  `ProtectionRule.notes` 与 `ListsConfig.notes`（`BTreeMap<String,String>`）与 `ports` /
+  `whitelist` / `blacklist` 并列存放，端口仍是 `Vec<u16>`、规则仍是 `Vec<String>`，
+  判定链路（`engine.rs` / `ban.rs` / `iprange.rs`）零改动，旧 `config.toml` 零迁移
+- **键必须是字符串**：TOML 的 map 键不支持整数（`toml_edit` 对整数键返回 `KeyNotString`），
+  因此端口用十进制字符串、名单用规则原文；含 `.` `*` `/` 的键由写入器自动加引号，手改配置时需保留引号
+- **新模块 `portguard-core/src/notes.rs`**：`clean`（去控制字符与首尾空白、按字符截断 64，
+  不按字节切以免切碎中文）、`normalize`（清洗 → 丢空值 → **清除孤儿备注**）、`get`
+- **孤儿清理只在 `Config::normalize` 一处**：端口 / 规则被删掉后其备注在下次保存时一并消失，
+  面板增删名单（`/api/lists/remove`）、整体保存、手改配置三条路径都经 `ConfigStore::save` → `normalize`，
+  各入口无需各写一份清理
+- **视图与填充**：`ConnectionView` / `BanView` 新增 `port_note` / `ip_note`，
+  由 `Controller::connections()` / `bans()` 在锁外查配置填充（与 `location` 同模式）；
+  封停记录没有分组标签，端口备注按 TCP → WEB → UDP 取第一个命中
+- **面板**：设置页三组端口与白/黑名单下方各有一张备注网格，随端口 / 规则输入实时重建，
+  未保存内容靠客户端缓存保住；概览「受保护端口」脚注拼成 `3389(远程桌面)`；
+  连接表与封停表内联灰字显示备注，一律 `textContent` 写入
+- 配置模板 `TEMPLATE_HEADER` 说明 `notes` 段用途与引号规则
+- 文档同步：`docs/web-ui-spec.md` 2.1 / 2.2 / 2.3 / 2.4、`docs/behavior-spec.md` 8.2 / 8.5 / 10、
+  四个 crate 的 `CLAUDE.md`
+
+### Tests
+
+- 新增 14 项：`notes` 模块 5 项（清洗、截断不切碎中文、孤儿清除、空备注不留在表里、空串视为无备注）、
+  `config` 5 项（含备注往返、端口删除后不残留、名单删除后不残留、旧配置缺字段仍可解析、按分组与按端口取备注）、
+  `storage` 1 项（保存后重新加载内容一致）、`web` 2 项（设置页挂载点契约、备注随配置往返并可展示）、
+  `app` 1 项（备注随端口与名单落盘并在删除后清除）
+- 合计 **288 项全部通过**（`portguard-core` 92 → 102、`portguard-storage` 19 → 20、
+  `portguard-web` 35 → 37、`portguard-app` 33 → 34）
+
+### Known Issues
+
+- 备注上限 64 字符（前端 `maxlength` 与后端 `clean` 双保险），超长内容静默截断
+- 同一规则同时出现在白名单与黑名单时共用一条备注（`lists.notes` 的键是规则原文，不区分名单）
+- 手改 `config.toml` 时若给 `[lists.notes]` 下含点的键漏写引号，会被解析成分层表导致整份配置
+  解析失败（走既有的 `config.toml.broken-*` 备份 + 回退默认），面板保存的写法始终带引号
 
 ---
 

@@ -264,7 +264,7 @@
           <div class="card">
             <div class="card-head">
               <div class="card-title">
-                受保护端口与阈值<small>端口用英文逗号分隔；次数为累计值，非某段时间内的次数</small>
+                受保护端口与阈值<small>端口用英文逗号分隔；次数为累计值，非某段时间内的次数；端口下方可逐条写备注（仅展示，不参与判定）</small>
               </div>
             </div>
             <div class="card-body" id="protect-rows"></div>
@@ -314,17 +314,19 @@
 
           <div class="card">
             <div class="card-head">
-              <div class="card-title">名单<small>每行一条；支持 1.2.3.4 / 1.2.3.0/24 / 1.2.3.* / 区间</small></div>
+              <div class="card-title">名单<small>每行一条；支持 1.2.3.4 / 1.2.3.0/24 / 1.2.3.* / 区间；下方可逐条写备注（仅展示）</small></div>
             </div>
             <div class="card-body">
               <div class="form-grid">
                 <div class="field">
                   <label for="cfg-whitelist">白名单（永不封停，优先级最高）</label>
                   <textarea id="cfg-whitelist" spellcheck="false"></textarea>
+                  <div class="note-grid" id="notes-whitelist"></div>
                 </div>
                 <div class="field">
                   <label for="cfg-blacklist">黑名单（出现即封停）</label>
                   <textarea id="cfg-blacklist" spellcheck="false"></textarea>
+                  <div class="note-grid" id="notes-blacklist"></div>
                 </div>
               </div>
             </div>

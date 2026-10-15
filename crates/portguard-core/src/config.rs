@@ -4,6 +4,8 @@
 //! 旧格式迁移在 `portguard-storage` 中单独实现，本模块只负责新格式。
 
 use crate::error::{AppError, Result};
+use crate::model::PortGroup;
+use crate::notes::{self, Notes};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -18,6 +20,12 @@ pub struct ProtectionRule {
     /// 计数不做滑动窗口：只要该来源还在活动就一直累加，空闲超过跟踪保留期
     /// （见 `portguard-app` 的 `TRACK_RETENTION_MS`）后条目被回收、计数归零。
     pub max_attempts: u32,
+    /// 端口备注（键为端口的十进制字符串，如 `"33890"`），**仅供面板展示**。
+    ///
+    /// 用平行映射而不是把备注塞进端口列表：`ports` 是引擎端口掩码的直接输入，
+    /// 保持 `Vec<u16>` 可以让判定链路完全不感知备注的存在（见 [`crate::notes`]）。
+    #[serde(skip_serializing_if = "Notes::is_empty")]
+    pub notes: Notes,
 }
 
 impl Default for ProtectionRule {
@@ -25,6 +33,7 @@ impl Default for ProtectionRule {
         ProtectionRule {
             ports: Vec::new(),
             max_attempts: 5,
+            notes: Notes::new(),
         }
     }
 }
@@ -38,6 +47,14 @@ impl ProtectionRule {
         if self.max_attempts == 0 {
             self.max_attempts = 1;
         }
+        // 备注跟着端口走：端口被删掉，它的备注留在这里就成了永远清不掉的垃圾
+        let keys: Vec<String> = self.ports.iter().map(|p| p.to_string()).collect();
+        notes::normalize(&mut self.notes, &keys);
+    }
+
+    /// 取某个端口的备注，无备注时返回空串（仅面板展示用）。
+    pub fn note(&self, port: u16) -> &str {
+        notes::get(&self.notes, &port.to_string()).unwrap_or("")
     }
 }
 
@@ -86,17 +103,50 @@ impl Default for ProtectConfig {
             tcp: ProtectionRule {
                 ports: vec![3389],
                 max_attempts: 5,
+                ..ProtectionRule::default()
             },
             udp: ProtectionRule {
                 ports: vec![3389],
                 max_attempts: 5,
+                ..ProtectionRule::default()
             },
             http: ProtectionRule {
                 ports: vec![80, 443],
                 max_attempts: DEFAULT_WEB_MAX_ATTEMPTS,
+                ..ProtectionRule::default()
             },
             count_accept: true,
         }
+    }
+}
+
+impl ProtectConfig {
+    /// 取某个分组下某个端口的备注（仅面板展示用，无备注返回空串）。
+    ///
+    /// `group` 用面板上的分组标签（`TCP` / `TCP-WEB` / `UDP`，即 `PortGroup::as_str`），
+    /// 与 `ConnectionView.group` 同源。
+    pub fn port_note(&self, group: &str, port: u16) -> &str {
+        if group == PortGroup::Tcp.as_str() {
+            self.tcp.note(port)
+        } else if group == PortGroup::Web.as_str() {
+            self.http.note(port)
+        } else if group == PortGroup::Udp.as_str() {
+            self.udp.note(port)
+        } else {
+            ""
+        }
+    }
+
+    /// 按端口在任意分组里找备注。
+    ///
+    /// 封停记录只记端口、不记它当时属于哪一组（同一端口可以同时在 TCP 与 WEB 组），
+    /// 因此这里按 TCP → TCP-WEB → UDP 取第一个命中的备注。
+    pub fn port_note_any(&self, port: u16) -> &str {
+        let key = port.to_string();
+        let found = [&self.tcp, &self.http, &self.udp]
+            .iter()
+            .find_map(|rule| notes::get(&rule.notes, &key));
+        found.unwrap_or("")
     }
 }
 
@@ -171,6 +221,19 @@ impl Default for BanConfig {
 pub struct ListsConfig {
     pub whitelist: Vec<String>,
     pub blacklist: Vec<String>,
+    /// 名单备注（键为规则原文，如 `"192.168.1.5"`），**仅供面板展示**。
+    ///
+    /// 白名单与黑名单共用一张表：键就是用户写的那条规则，同一条规则出现在两张
+    /// 名单里时共用一条备注，用户不必维护两份说明。
+    #[serde(skip_serializing_if = "Notes::is_empty")]
+    pub notes: Notes,
+}
+
+impl ListsConfig {
+    /// 取某条名单规则的备注，无备注时返回空串（仅面板展示用）。
+    pub fn rule_note(&self, rule: &str) -> &str {
+        notes::get(&self.notes, rule).unwrap_or("")
+    }
 }
 
 /// RDP 客户端计算机名保护配置。
@@ -336,6 +399,11 @@ impl Config {
         }
         self.lists.whitelist = normalize_rule_lines(&self.lists.whitelist);
         self.lists.blacklist = normalize_rule_lines(&self.lists.blacklist);
+        // 名单备注跟着规则走（键是规则原文）：规则被删掉，备注一并清除，
+        // 否则日后加回同一条规则会看到一条早该消失的旧备注
+        let mut rule_keys = self.lists.whitelist.clone();
+        rule_keys.extend(self.lists.blacklist.iter().cloned());
+        notes::normalize(&mut self.lists.notes, &rule_keys);
         self.rdp.client_whitelist = normalize_rule_lines(&self.rdp.client_whitelist);
         // 旧版配置（或缺失该字段）统一抬到当前结构版本，避免后续迁移误判
         if self.config_version < CURRENT_CONFIG_VERSION {
@@ -548,10 +616,91 @@ mod tests {
         let mut r = ProtectionRule {
             ports: vec![443, 80, 443, 0, 3389],
             max_attempts: 0,
+            ..ProtectionRule::default()
         };
         r.normalize();
         assert_eq!(r.ports, vec![80, 443, 3389]);
         assert_eq!(r.max_attempts, 1);
+    }
+
+    #[test]
+    fn 备注随配置往返且空备注不落盘() {
+        let mut c = Config::with_defaults();
+        c.protect.tcp.ports = vec![22, 3389];
+        // 端口备注键是十进制字符串；名单备注键含 . / * ，写入器会自动加引号
+        c.protect.tcp.notes.insert("3389".to_string(), "远程桌面".to_string());
+        c.protect.tcp.notes.insert("22".to_string(), "跳板机".to_string());
+        c.lists.whitelist = vec!["192.168.1.0/24".to_string(), "10.0.0.8".to_string()];
+        c.lists.notes.insert("192.168.1.0/24".to_string(), "办公网段".to_string());
+        c.normalize();
+
+        let text = c.to_toml().unwrap();
+        let back = Config::from_toml(&text).unwrap();
+        assert_eq!(back, c, "备注必须与端口 / 名单一起往返：{}", text);
+        assert_eq!(back.protect.tcp.note(3389), "远程桌面");
+        assert_eq!(back.lists.rule_note("192.168.1.0/24"), "办公网段");
+
+        // 没有任何备注时，生成的配置里不出现 notes 段（不污染手工阅读）
+        let plain = Config::with_defaults().to_toml().unwrap();
+        assert!(!plain.contains("notes"), "空备注不应写进配置：{}", plain);
+    }
+
+    #[test]
+    fn 端口被删掉后备注不残留() {
+        let mut c = Config::with_defaults();
+        c.protect.tcp.ports.push(33890);
+        c.protect.tcp.notes.insert("33890".to_string(), "frp: 财务系统".to_string());
+        c.normalize();
+        assert_eq!(c.protect.tcp.note(33890), "frp: 财务系统");
+
+        c.protect.tcp.ports.retain(|p| *p != 33890);
+        c.normalize();
+        assert!(c.protect.tcp.notes.is_empty(), "端口没了，备注必须跟着走");
+    }
+
+    #[test]
+    fn 名单规则被删掉后备注不残留() {
+        let mut c = Config::with_defaults();
+        c.lists.whitelist = vec!["192.168.1.5".to_string()];
+        c.lists.notes.insert("192.168.1.5".to_string(), "办公机 · 张三".to_string());
+        c.normalize();
+        assert_eq!(c.lists.rule_note("192.168.1.5"), "办公机 · 张三");
+
+        c.lists.whitelist.clear();
+        c.normalize();
+        assert!(c.lists.notes.is_empty(), "规则没了，备注必须跟着走");
+
+        // 同一条规则同时出现在两张名单里时共用一条备注
+        let mut both = Config::with_defaults();
+        both.lists.whitelist = vec!["1.2.3.4".to_string()];
+        both.lists.blacklist = vec!["1.2.3.4".to_string()];
+        both.lists.notes.insert("1.2.3.4".to_string(), "共用备注".to_string());
+        both.normalize();
+        assert_eq!(both.lists.rule_note("1.2.3.4"), "共用备注");
+    }
+
+    #[test]
+    fn 旧配置缺少备注字段也能解析() {
+        // 备注是本版本新增字段：旧 config.toml 不带 notes 段，必须照常读入
+        let c = Config::from_toml("[protect.tcp]\nports = [3389]\nmax_attempts = 5\n").unwrap();
+        assert!(c.protect.tcp.notes.is_empty());
+        assert!(c.lists.notes.is_empty());
+        assert_eq!(c.protect.tcp.note(3389), "");
+    }
+
+    #[test]
+    fn 按分组与按端口取备注() {
+        let mut c = Config::with_defaults();
+        c.protect.tcp.notes.insert("3389".to_string(), "远程桌面".to_string());
+        c.protect.http.notes.insert("33890".to_string(), "frp: 财务".to_string());
+        assert_eq!(c.protect.port_note("TCP", 3389), "远程桌面");
+        assert_eq!(c.protect.port_note("TCP-WEB", 33890), "frp: 财务");
+        // 分组对不上、端口没备注都返回空串，面板据此不占位
+        assert_eq!(c.protect.port_note("UDP", 3389), "");
+        assert_eq!(c.protect.port_note("不存在", 3389), "");
+        // 封停记录只有端口没有分组：按 TCP → TCP-WEB → UDP 取第一个命中
+        assert_eq!(c.protect.port_note_any(33890), "frp: 财务");
+        assert_eq!(c.protect.port_note_any(9999), "");
     }
 
     #[test]
