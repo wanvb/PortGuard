@@ -54,6 +54,7 @@
 - 面板无口令，安全完全依赖「仅监听回环 + Host 校验 + Origin 校验」，不得为调试关闭
 - IP 地理位置只用于展示，绝不参与封停判定；查询失败显示「未知」，不得影响判定（规范 22）
 - 旧版数据文件（`config.dat` / `BanData.bin` / `PortGuard.txt`）已永久放弃，不得为其编写解析器或兼容分支
+- `PortGuard.exe` 必须内嵌 `requireAdministrator` 应用程序清单（由 `crates/portguard-app/build.rs` 注入），双击即触发 UAC 提权；不得退化为「要求用户手动右键以管理员身份运行」
 - Git 提交信息需有意义（feat/fix/test 前缀；禁止 "update"/"test"/"fix"/"aaa"/"final"）
 
 ## 文档索引

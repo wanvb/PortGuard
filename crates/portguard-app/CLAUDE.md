@@ -4,6 +4,7 @@
 - 主程序（可执行文件 `PortGuard.exe`），形态为「系统托盘 + 内嵌 Web 控制面板」单 exe 部署（控制台窗口默认隐藏，`--console` 可保留）。
 - 编排启动顺序、驱动主循环、执行退出收尾。
 - `cli`：解析命令行开关；`runtime`：抓包判定 → 队列 → 执行线程的运行期业务回路；`controller`：`PortGuardApi` 实现，把状态翻译成面板视图、把操作翻译成后台动作与配置落盘。
+- `build.rs`：仅对 MSVC 目标向 `PortGuard.exe` 注入内嵌应用程序清单（`/MANIFEST:EMBED` + `/MANIFESTUAC:level='requireAdministrator'`），使双击运行默认弹出 UAC 提权，无需用户手动右键「以管理员身份运行」。
 - 不做什么：不直接实现抓包解析、防火墙规则或 Win32 细节，全部委托给对应 crate。
 
 ## 对外接口
@@ -19,6 +20,8 @@
 ## 关键约束
 - **启动顺序固定**：参数 → **服务模式分发** → 隐藏控制台窗口 → 数据目录 → 配置 → 日志 → 旧配置迁移 → 单实例 → 权限提示 → 运行时（抓包 + 封停）→ 面板 → 托盘 → 自动选网卡 → 开始保护 → 主循环 → 收尾。
 - **控制台窗口默认隐藏**（`cli.Options.console == false`）：`portguard_win::hide_own_console_window()` 只在控制台独占本进程时动手，从 cmd 启动或加 `--console` 时保留窗口。隐藏判定必须放在最前（越早越小概率看到黑窗口闪烁），且隐藏后启动期的致命错误一律走 `fail` 的对话框分支 —— 否则表现为「双击没反应」（规范 26.1）。托盘形态不变：右键菜单照旧提供打开面板 / 暂停保护 / 退出。
+- **UAC 自提权必须靠内嵌清单**：`build.rs` 用 `cargo:rustc-link-arg-bins` 下发链接参数，不受环境变量 `RUSTFLAGS` 覆盖，因此 `build.bat` 的静态 CRT 分支（会设置 `RUSTFLAGS`）同样带上清单。**不得改用 `.cargo/config.toml` 的 `rustflags`** —— 它会被 `RUSTFLAGS` 整体覆盖，表现为某一类构建静默丢失提权清单。`/MANIFEST:EMBED` 保证清单写进 exe 的 `RT_MANIFEST` 资源，而不是生成同目录的外部 `.manifest` 文件（后者不会触发提权）。非 Windows / 非 MSVC 目标不注入。清单缺失时 `mt.exe -inputresource:PortGuard.exe;#1` 会报「指定的映像文件不包含资源区域」。
+- **服务模式与提权清单不冲突**：`--service` 由 SCM 以 LocalSystem 拉起，服务管理器不读清单、不弹 UAC；降级路径（`portguard_win::admin` 判定非管理员 → 只告警不启动保护）继续保留，用于 UAC 被系统关闭（`EnableLUA=0`）等仍然拿不到提升令牌的场景。
 - **启动期告警在隐藏控制台后改走托盘气泡**：非管理员、自动开始保护失败两条都写进 `notices`，托盘建好后逐个 `balloon`；服务模式（会话 0）没有托盘，只留日志与面板。
 - **旧配置迁移必须落盘**：`Config::migrate()` 只改内存，主程序拿到非空结果后立即 `store.save`（写盘失败只告警不退出，迁移在本次运行仍然生效）。不落盘的话，第二个实例会拿文件里的旧端口去开面板，而运行中的实例已换到新端口，用户看到的就是「页面打不开」。
 - **抓包线程只做锁内判定 + 入队**（规范 42 / 19）：`PacketSink::consume` 在锁内更新计数、`engine.evaluate`、必要时 `tx.send(Action::Ban)`，绝不调用防火墙或写文件；netsh 与落盘全部交给 `portguard-worker` 执行线程串行完成。
